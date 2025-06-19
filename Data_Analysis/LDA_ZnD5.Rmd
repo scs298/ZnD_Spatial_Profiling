@@ -1,0 +1,578 @@
+---
+title: "LDA_ZnD5"
+output: html_document
+date: "2025-05-20"
+---
+
+```{r}
+metadata_ZnD5 <- read.table("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/ZnD5_metadata.csv", header = TRUE, sep = ",", stringsAsFactors = FALSE)
+metadata_ZnD5$Treatment <- as.factor(metadata_ZnD5$Treatment)
+metadata_ZnD5$Treatment <- relevel(metadata_ZnD5$Treatment, ref = "ZnA")
+#metadata_ZnD5$Sample <- gsub("ZnD5\\.", "ZnD5-", metadata_ZnD5$Sample)
+rownames(metadata_ZnD5) <- metadata_ZnD5$Sample
+metadata_ZnD5
+
+combined_bracken_ZnD5_G <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/PlusPF_Database/combined_bracken_output/combined_data_ZnDZnA_G.csv", row.names = 1)
+colnames(combined_bracken_ZnD5_G) <- gsub("^X", "", colnames(combined_bracken_ZnD5_G))
+combined_bracken_ZnD5_G
+
+combined_bacteria_G <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/PlusPF_Database/Bracken_Data_Sep_Kingdom/combined_bacteria_G.csv", row.names = 1)
+colnames(combined_bacteria_G) <- gsub("^X", "", colnames(combined_bacteria_G))
+combined_bacteria_G <- combined_bacteria_G[, rownames(metadata_ZnD5)]
+combined_bacteria_G
+
+combined_bracken_ZnD5_G <- combined_bracken_ZnD5_G[, rownames(metadata_ZnD5)]
+
+```
+
+```{r}
+
+#FOR BRACKED DATAFRAME FOR ALL KINGDOM LEVELS
+library(SummarizedExperiment)
+
+# Construct the SummarizedExperiment object
+se <- SummarizedExperiment(
+  assays = list(counts = as.matrix(combined_bracken_ZnD5_G)),
+  colData = metadata_ZnD5
+  
+)
+
+library(phyloseq)
+
+otu <- otu_table(combined_bracken_ZnD5_G, taxa_are_rows = TRUE)
+sample_data <- sample_data(metadata_ZnD5)
+ps <- phyloseq(otu, sample_data)
+
+#FOR BRACKED DATAFRAME FOR BACTERIA ONLY
+se_bacteria <- SummarizedExperiment(
+  assays = list(counts = as.matrix(combined_bacteria_G)),
+  colData = metadata_ZnD5
+  
+)
+otu_bacteria <- otu_table(combined_bacteria_G, taxa_are_rows = TRUE)
+sample_data_bacteria <- sample_data(metadata_ZnD5)
+ps_bacteria <- phyloseq(otu_bacteria, sample_data_bacteria)
+```
+
+```{r}
+#FOR ALL KINGDOMS 
+library(microbiomeMarker)
+# Get feature names
+taxa <- rownames(combined_bracken_ZnD5_G)
+taxonomy <- data.frame(Genus = taxa, row.names = taxa, stringsAsFactors = FALSE)
+taxonomy <- as.matrix(taxonomy)
+tax <- tax_table(taxonomy)
+ps <- phyloseq(otu, tax, sample_data)
+
+lefse_result_treatment <- run_lefse(
+  ps,
+  group = "Treatment",  # or whatever your group column is
+  norm = "CPM",
+  lda_cutoff = 1.5
+)
+
+lefse_result_location <- run_lefse(
+  ps,
+  group = "Location",  # or whatever your group column is
+  norm = "CPM",
+  lda_cutoff = 2
+)
+
+res_treatment <- marker_table(lefse_result_treatment)
+res_location <- marker_table(lefse_result_location)
+
+#FOR BACTERIA ONLY 
+library(microbiomeMarker)
+# Get feature names
+taxa_bacteria <- rownames(combined_bacteria_G)
+taxonomy_bacteria <- data.frame(Genus = taxa_bacteria, row.names = taxa_bacteria, stringsAsFactors = FALSE)
+taxonomy_bacteria <- as.matrix(taxonomy_bacteria)
+tax_bacteria <- tax_table(taxonomy_bacteria)
+ps_bacteria <- phyloseq(otu_bacteria, tax_bacteria, sample_data_bacteria)
+
+lefse_result_treatment_bacteria <- run_lefse(
+  ps_bacteria,
+  group = "Treatment",  # or whatever your group column is
+  norm = "CPM",
+  lda_cutoff = 1.5
+)
+
+lefse_result_location_bacteria <- run_lefse(
+  ps_bacteria,
+  group = "Location",  # or whatever your group column is
+  norm = "CPM",
+  lda_cutoff = 2
+)
+
+res_treatment_bacteria <- marker_table(lefse_result_treatment_bacteria)
+res_location_bacteria <- marker_table(lefse_result_location_bacteria)
+
+
+```
+
+
+#PLOTTING LEFSE FOR ALL TAXONOMIC LEVELS 
+```{r}
+library(ggplot2)
+
+res_treatment$feature <- factor(res_treatment$feature, levels = res_treatment$feature[order(res_treatment$ef_lda)])
+
+res_location$feature <- factor(res_location$feature, levels = res_location$feature[order(res_location$ef_lda)])
+
+# Assign signed LDA score (e.g., make ZnD negative)
+res_treatment$lda_signed <- ifelse(res_treatment$enrich_group == "ZnD", -res_treatment$ef_lda, res_treatment$ef_lda)
+res_location$lda_signed <- ifelse(res_location$enrich_group == "intestine", -res_location$ef_lda, res_location$ef_lda)
+
+# Reorder feature factor by signed LDA
+res_treatment$feature <- factor(res_treatment$feature, levels = res_treatment$feature[order(res_treatment$lda_signed)])
+res_location$feature <- factor(res_location$feature, levels = res_location$feature[order(res_location$lda_signed)])
+
+```
+
+#PLOTTING LEFSE FOR BACTERIA ONLY  
+```{r}
+library(ggplot2)
+
+res_treatment_bacteria$feature <- factor(res_treatment_bacteria$feature, levels = res_treatment_bacteria$feature[order(res_treatment_bacteria$ef_lda)])
+
+res_location_bacteria$feature <- factor(res_location_bacteria$feature, levels = res_location_bacteria$feature[order(res_location_bacteria$ef_lda)])
+
+# Assign signed LDA score (e.g., make ZnD negative)
+res_treatment_bacteria$lda_signed <- ifelse(res_treatment_bacteria$enrich_group == "ZnD", -res_treatment_bacteria$ef_lda, res_treatment_bacteria$ef_lda)
+res_location_bacteria$lda_signed <- ifelse(res_location_bacteria$enrich_group == "intestine", -res_location_bacteria$ef_lda, res_location_bacteria$ef_lda)
+
+# Reorder feature factor by signed LDA
+res_treatment_bacteria$feature <- factor(res_treatment_bacteria$feature, levels = res_treatment_bacteria$feature[order(res_treatment_bacteria$lda_signed)])
+res_location_bacteria$feature <- factor(res_location_bacteria$feature, levels = res_location_bacteria$feature[order(res_location_bacteria$lda_signed)])
+
+```
+
+
+# MAKE GRAPHS FOR LEFSE TREATMENT AND LOCAITON FOR ALL TAXONOMIC LEVELS
+```{r}
+# Run LEfSe per location
+ggplot(res_treatment, aes(x = feature, y = lda_signed, fill = enrich_group)) +
+  geom_col(color = "black", size = 0.4) +  # <-- outline added here
+  coord_flip() +
+  geom_vline(xintercept = 0, color = "gray40", linetype = "dashed") +
+  labs(
+    x = "Feature",
+    y = "LDA Score (log10)",
+    fill = "Treatment"  # Legend title
+  ) +
+  scale_fill_manual(values = c("ZnD" = "#E8B31A", "ZnA" = "#75AE33")) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.title = element_text(face = "bold", color = "black"),
+    axis.text = element_text(face = "bold", color = "black"),
+    legend.title = element_text(face = "bold", color = "black"),
+    legend.text = element_text(color = "black")
+  )
+
+#ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/PlusPF_Database/figures/LDA/lefse_plot_treatment.png", width = 5, height = 1.5, units = "in", dpi = 300)
+
+ggplot(res_location, aes(x = feature, y = lda_signed, fill = enrich_group)) +
+  geom_col(color = "black", size = 0.4) +  # <-- outline added here
+  coord_flip() +
+  geom_vline(xintercept = 0, color = "gray40", linetype = "dashed") +
+  labs(
+    x = "Feature",
+    y = "LDA Score (log10)",
+    fill = "Treatment"  # Legend title
+  ) +
+  scale_fill_manual(values = c("colon" = "#D55E00", "intestine" = "#56B4E9", "cecum" = "#009E73")) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.title = element_text(face = "bold", color = "black"),
+    axis.text = element_text(face = "bold", color = "black"),
+    legend.title = element_text(face = "bold", color = "black"),
+    legend.text = element_text(color = "black")
+  )
+
+#ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/PlusPF_Database/figures/LDA/lefse_plot_location.png", width = 7, height = 10, units = "in", dpi = 300)
+
+
+```
+
+#MAKE GRAPHS FOR LEFSE TREATMENT AND LOCATION FOR BACTERIA ONLY
+```{r}
+# Run LEfSe per location
+ggplot(res_treatment_bacteria, aes(x = feature, y = lda_signed, fill = enrich_group)) +
+  geom_col(color = "black", size = 0.4) +  # <-- outline added here
+  coord_flip() +
+  geom_vline(xintercept = 0, color = "gray40", linetype = "dashed") +
+  labs(
+    x = "Feature",
+    y = "LDA Score (log10)",
+    fill = "Treatment"  # Legend title
+  ) +
+  scale_fill_manual(values = c("ZnD" = "#E8B31A", "ZnA" = "#75AE33")) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.title = element_text(face = "bold", color = "black"),
+    axis.text = element_text(face = "bold", color = "black"),
+    legend.title = element_text(face = "bold", color = "black"),
+    legend.text = element_text(color = "black")
+  )
+
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/PlusPF_Database/figures/LDA/lefse_plot_treatment_BACTERIA.png", width = 5, height = 1.5, units = "in", dpi = 300)
+
+ggplot(res_location_bacteria, aes(x = feature, y = lda_signed, fill = enrich_group)) +
+  geom_col(color = "black", size = 0.4) +  # <-- outline added here
+  coord_flip() +
+  geom_vline(xintercept = 0, color = "gray40", linetype = "dashed") +
+  labs(
+    x = "Feature",
+    y = "LDA Score (log10)",
+    fill = "Treatment"  # Legend title
+  ) +
+  scale_fill_manual(values = c("colon" = "#D55E00", "intestine" = "#56B4E9", "cecum" = "#009E73")) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.title = element_text(face = "bold", color = "black"),
+    axis.text = element_text(face = "bold", color = "black"),
+    legend.title = element_text(face = "bold", color = "black"),
+    legend.text = element_text(color = "black")
+  )
+
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/PlusPF_Database/figures/LDA/lefse_plot_location_BACTERIA.png", width = 7, height = 10, units = "in", dpi = 300)
+
+```
+
+
+#LDA GRAPHSH BY TREATMENT, BUT SEPARATED FOR EACH LOCATION 
+#FINAL CODE BELOW IN WHICH I REPLACED EACH LOCATION AND RAN IT INDIVIDUALLY
+
+```{r}
+set.seed(42)
+
+loc <- "cecum"
+cat("Processing location:", loc, "\n")
+
+ps_loc <- subset_samples(ps_bacteria, Location == loc)
+
+treatments_present <- unique(sample_data(ps_loc)$Treatment)
+if (length(treatments_present) < 2) {
+  warning(paste("Skipping", loc, "- Not enough groups for comparison."))
+} else {
+  
+  group_sizes <- table(sample_data(ps_loc)$Treatment)
+  if (any(group_sizes < 2)) {
+    warning(paste("Skipping", loc, "- Not enough samples per group. Group sizes:",
+                  paste(names(group_sizes), group_sizes, sep = "=", collapse = ", ")))
+  } else {
+    
+    otu_counts <- as.data.frame(as.matrix(otu_table(ps_loc)))
+    otu_counts <- otu_counts[rowSums(otu_counts > 0) >= 3, , drop = FALSE]
+    otu_counts <- log10(otu_counts + 1)
+    
+    if (nrow(otu_counts) == 0) {
+      warning(paste("Skipping", loc, "- All taxa are zeros or too sparse after filtering."))
+    } else if (any(!is.finite(as.matrix(otu_counts)))) {
+      warning(paste("Skipping", loc, "- Infinite or missing values found in OTU table."))
+    } else {
+      
+      # Additional filter: remove taxa with zero variance within any group
+      grp_labels <- sample_data(ps_loc)$Treatment
+      keep_taxa <- apply(otu_counts, 1, function(x) {
+        all(tapply(x, grp_labels, var) > 0)
+      })
+      otu_counts <- otu_counts[keep_taxa, , drop = FALSE]
+      
+      cat("Number of taxa after zero-variance filtering:", nrow(otu_counts), "\n")
+      
+      if (nrow(otu_counts) == 0) {
+        warning(paste("Skipping", loc, "- No taxa with variance within groups left after filtering."))
+      } else {
+        otu_table(ps_loc) <- otu_table(as.matrix(otu_counts), taxa_are_rows = TRUE)
+        
+        # Iterative sample index removal
+        max_attempts <- 20
+        attempt <- 1
+        success <- FALSE
+        
+        while (attempt <= max_attempts) {
+          cat("⚡ Attempt", attempt, "running LEfSe for", loc, "\n")
+          
+          tryCatch({
+            lefse_result <- run_lefse(
+              ps_loc,
+              group = "Treatment",
+              norm = "CPM",
+              lda_cutoff = 1
+            )
+            
+            # Success!
+            res <- marker_table(lefse_result)
+            res$lda_signed <- ifelse(res$enrich_group == "ZnD", -res$ef_lda, res$ef_lda)
+            res$feature <- factor(res$feature, levels = res$feature[order(res$lda_signed)])
+            
+            p <- ggplot(res, aes(x = feature, y = lda_signed, fill = enrich_group)) +
+              geom_col(color = "black", size = 0.4) +
+              coord_flip() +
+              geom_vline(xintercept = 0, color = "gray40", linetype = "dashed") +
+              labs(
+                x = "Feature",
+                y = "LDA Score (log10)",
+                fill = "Treatment",
+                title = paste("LEfSe Results:", loc)
+              ) +
+              scale_fill_manual(values = c("ZnD" = "#E8B31A", "ZnA" = "#75AE33")) +
+              theme_minimal(base_size = 13) +
+              theme(
+                axis.title = element_text(face = "bold", color = "black"),
+                axis.text = element_text(face = "bold", color = "black"),
+                legend.title = element_text(face = "bold", color = "black"),
+                legend.text = element_text(color = "black")
+              )
+            
+            print(p)
+            
+            ggsave(
+              filename = paste0(
+                "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/PlusPF_Database/figures/LDA/lefse_plot_BACTERIA3_",
+                loc, ".png"
+              ),
+              plot = p,
+              width = 5,
+              height = 1.4,
+              units = "in",
+              dpi = 300
+            )
+            
+            cat("✅ Plot saved for location:", loc, "\n")
+            success <- TRUE
+            
+          }, error = function(e) {
+            warning(paste("⚠️ run_lefse() failed on attempt", attempt, "for", loc, "with error:", e$message))
+            
+            index_match <- regmatches(e$message, regexec("In index: ([0-9]+)", e$message))
+            if (length(index_match[[1]]) > 1) {
+              idx <- as.numeric(index_match[[1]][2])
+              sample_names_current <- sample_names(ps_loc)
+              if (idx <= length(sample_names_current)) {
+                sample_to_remove <- sample_names_current[idx]
+                cat("🚨 Removing problematic sample:", sample_to_remove, "\n")
+                ps_loc <- prune_samples(sample_names(ps_loc) != sample_to_remove, ps_loc)
+                group_sizes_updated <- table(sample_data(ps_loc)$Treatment)
+                if (any(group_sizes_updated < 2)) {
+                  warning(paste("⚠️ Skipping", loc, "- Not enough samples per group after sample removal. Group sizes:",
+                                paste(names(group_sizes_updated), group_sizes_updated, sep = "=", collapse = ", ")))
+                  attempt <<- max_attempts  # Force exit
+                }
+              } else {
+                warning(paste("⚠️ Invalid index:", idx, "- cannot remove sample."))
+                attempt <<- max_attempts  # Force exit
+              }
+            } else {
+              warning(paste("⚠️ run_lefse() failed with unhandled error for", loc, ":", e$message))
+              attempt <<- max_attempts  # Force exit
+            }
+          })
+          
+          if (success) break
+          attempt <- attempt + 1
+        }
+        
+        if (!success) {
+          warning(paste("⚠️ Skipping", loc, "- Could not complete LEfSe analysis after", max_attempts, "attempts."))
+          
+          # Save placeholder plot
+          p <- ggplot() +
+            annotate("text", x = 0.5, y = 0.5, label = paste("No significant features detected\nin", loc), size = 5) +
+            theme_void() +
+            labs(title = paste("LEfSe Results:", loc))
+          
+          ggsave(
+            filename = paste0(
+              "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/PlusPF_Database/figures/LDA/lefse_plot_BACTERIA_3",
+              loc, ".png"
+            ),
+            plot = p,
+            width = 5,
+            height = 1.75,
+            units = "in",
+            dpi = 300
+          )
+          cat("⚠️ Placeholder plot saved for location:", loc, "\n")
+        }
+      }
+    }
+  }
+}
+
+```
+
+
+```{r}
+library(phyloseq)
+library(microbiomeMarker)
+library(ggplot2)
+
+ps_bacteria <- phyloseq(otu_bacteria, tax_bacteria, sample_data_bacteria)
+locations <- unique(metadata_ZnD5$Location)
+
+output_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/PlusPF_Database/figures/LDA"
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+lefse_results_by_location <- list()
+res_by_location <- list()
+
+for (loc in locations) {
+  cat("\n🔍 Processing location:", loc, "\n")
+  
+  ps_loc <- subset_samples(ps_bacteria, Location == loc)
+  treatments_present <- unique(sample_data(ps_loc)$Treatment)
+  if (length(treatments_present) < 2) {
+    warning(paste("⚠️ Skipping", loc, "- Not enough groups for comparison."))
+    next
+  }
+  
+  otu_counts <- as.data.frame(as.matrix(otu_table(ps_loc)))
+  otu_counts <- otu_counts[rowSums(otu_counts) > 0, , drop = FALSE]
+  if (nrow(otu_counts) == 0) {
+    warning(paste("⚠️ Skipping", loc, "- All taxa are zeros after filtering."))
+    next
+  }
+  
+  otu_table(ps_loc) <- otu_table(as.matrix(otu_counts), taxa_are_rows = TRUE)
+  if (any(!is.finite(as.matrix(otu_counts)))) {
+    warning(paste("⚠️ Skipping", loc, "- Infinite or missing values found in OTU table."))
+    next
+  }
+  
+  cat("Number of taxa before LEfSe:", ntaxa(ps_loc), "\n")
+  
+  otu_mat <- as.matrix(otu_table(ps_loc))
+  grp_labels <- sample_data(ps_loc)$Treatment
+  zero_var_taxa <- apply(otu_mat, 1, function(x) {
+    any(tapply(x, grp_labels, function(y) var(y, na.rm = TRUE)) == 0)
+  })
+  if (any(zero_var_taxa)) {
+    cat("🚨 Removing taxa with zero variance:", sum(zero_var_taxa), "\n")
+    otu_mat <- otu_mat[!zero_var_taxa, , drop = FALSE]
+    ps_loc <- phyloseq(
+      otu_table(otu_mat, taxa_are_rows = TRUE),
+      tax_table(ps_loc)[rownames(otu_mat), ],
+      sample_data(ps_loc)
+    )
+  }
+  
+  taxa_to_remove <- character(0)
+  attempt <- 1
+  max_attempts <- 50
+  success <- FALSE
+  
+  while (attempt <= max_attempts) {
+    cat("⚡ Attempt", attempt, "running LEfSe for", loc, "\n")
+    
+    if (length(taxa_to_remove) > 0) {
+      keep_rows <- !rownames(otu_table(ps_loc)) %in% taxa_to_remove
+      if (sum(keep_rows) < 2) {
+        warning(paste("⚠️ Skipping", loc, "- Not enough taxa left after blacklisting."))
+        break
+      }
+      ps_loc <- phyloseq(
+        otu_table(as.matrix(otu_table(ps_loc))[keep_rows, , drop = FALSE], taxa_are_rows = TRUE),
+        tax_table(ps_loc)[keep_rows, ],
+        sample_data(ps_loc)
+      )
+    }
+    
+    error_occurred <- FALSE
+    tryCatch({
+      set.seed(42)
+      lefse_result <- run_lefse(ps_loc, group = "Treatment", norm = "CPM", lda_cutoff = 1)
+      
+      if (is.null(lefse_result)) {
+        warning(paste("⚠️ run_lefse() returned NULL for", loc, "- skipping."))
+        break
+      }
+      
+      res <- marker_table(lefse_result)
+      if (is.null(res) || nrow(res) == 0) {
+        warning(paste("⚠️ No significant features found for", loc, "- no plot produced."))
+        break
+      }
+      
+      # Store results
+      lefse_results_by_location[[loc]] <- lefse_result
+      res$lda_signed <- ifelse(res$enrich_group == "ZnD", -res$ef_lda, res$ef_lda)
+      res$feature <- factor(res$feature, levels = res$feature[order(res$lda_signed)])
+      res_by_location[[loc]] <- res
+      
+      # Plot
+      p <- ggplot(res, aes(x = feature, y = lda_signed, fill = enrich_group)) +
+        geom_col(color = "black", size = 0.4) +
+        coord_flip() +
+        geom_vline(xintercept = 0, color = "gray40", linetype = "dashed") +
+        labs(
+          x = "Feature",
+          y = "LDA Score (log10)",
+          fill = "Treatment",
+          title = paste("LEfSe Results:", loc)
+        ) +
+        scale_fill_manual(values = c("ZnD" = "#E8B31A", "ZnA" = "#75AE33")) +
+        theme_minimal(base_size = 13) +
+        theme(
+          axis.title = element_text(face = "bold"),
+          axis.text = element_text(face = "bold"),
+          legend.title = element_text(face = "bold"),
+          legend.text = element_text()
+        )
+      
+      print(p)
+      output_path <- file.path(output_dir, paste0("lefse_plot_BACTERIA2_", loc, ".png"))
+      ggsave(output_path, plot = p, width = 5, height = 2, dpi = 300)
+      cat("✅ LEfSe analysis completed and plot saved for", loc, "\n")
+      success <- TRUE
+    }, error = function(e) {
+      error_occurred <<- TRUE
+      warning(paste("⚠️ run_lefse() failed on attempt", attempt, "for", loc, "with error:", e$message))
+      index_match <- regmatches(e$message, regexec("In index: ([0-9]+)", e$message))
+      if (length(index_match[[1]]) > 1) {
+        idx <- as.numeric(index_match[[1]][2])
+        otu_mat <- as.matrix(otu_table(ps_loc))
+        if (idx <= nrow(otu_mat)) {
+          taxon_to_remove <- rownames(otu_mat)[idx]
+          cat("🚨 Blacklisting taxon:", taxon_to_remove, "\n")
+          taxa_to_remove <<- unique(c(taxa_to_remove, taxon_to_remove))
+        } else {
+          warning(paste("⚠️ Invalid index:", idx, "- cannot remove taxon."))
+          success <<- TRUE
+        }
+      } else {
+        warning(paste("⚠️ run_lefse() failed with unhandled error for", loc, ":", e$message))
+        success <<- TRUE
+      }
+    })
+    
+    # Safety net
+    if (length(taxa_to_remove) >= (nrow(otu_table(ps_loc)) - 1)) {
+      warning(paste("⚠️ Skipping", loc, "- Too many taxa blacklisted."))
+      break
+    }
+    
+    if (!error_occurred && !success) {
+      warning(paste("⚠️ run_lefse() exited without error but no result was produced for", loc, "- skipping."))
+      break
+    }
+    if (success) break
+    attempt <- attempt + 1
+  }
+  
+  if (!success) {
+    warning(paste("⚠️ Skipping", loc, "- Could not complete LEfSe analysis after", max_attempts, "attempts."))
+  }
+}
+
+cat("\n🎉 All locations processed!\n")
+
+
+```
+
+
+
+
+
+

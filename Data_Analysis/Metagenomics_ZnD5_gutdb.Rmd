@@ -1,0 +1,4291 @@
+---
+title: "Metagenomics_ZnD5_gutdb"
+output: html_document
+date: "2025-03-21"
+---
+
+
+#LOAD METADATA
+
+```{r}
+
+metadata_ZnD5 <- read.table("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/ZnD5_metadata.csv", header = TRUE, sep = ",", stringsAsFactors = FALSE)
+metadata_ZnD5$Treatment <- as.factor(metadata_ZnD5$Treatment)
+metadata_ZnD5$Treatment <- relevel(metadata_ZnD5$Treatment, ref = "ZnA")
+metadata_ZnD5
+metadata_ZnD5_gut <- metadata_ZnD5
+metadata_ZnD5_gut$Sample <- sub("(_10478109.*)", "", metadata_ZnD5_gut$Sample)
+metadata_ZnD5_gut
+
+
+```
+
+
+#COMBINED DATA FOR BRACKEN USING SPECIES NAMES AS THE ROW NAMES
+
+```{r}
+library(data.table)
+library(dplyr)
+# List of Bracken files
+file_list <- list.files(path = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/bracken_output_S_gutdb/", pattern = "_bracken_output.txt", full.names = TRUE)
+
+bracken_data_c_gut <- lapply(file_list, function(file) {
+  # Extract sample name from the file name
+  sample_name <- gsub("_bracken_output.txt", "", basename(file))
+  
+  # Read the file and keep necessary columns
+  data <- read.table(file, header = TRUE, sep = "\t") %>%
+    select(name, new_est_reads) %>%
+    rename_with(~ sample_name, .cols = new_est_reads)  # Correct way to rename dynamically
+
+  return(data)
+})
+
+# Merge all data by the "Taxon" column
+combined_data_c_gut <- Reduce(function(x, y) merge(x, y, by = "name", all = TRUE), bracken_data_c_gut)
+
+# Replace NA with 0 (if there are missing taxa in some samples)
+combined_data_c_gut[is.na(combined_data_c_gut)] <- 0
+
+rownames(combined_data_c_gut) <- combined_data_c_gut$name
+combined_data_c_gut <- combined_data_c_gut[, -1]
+
+write.csv(combined_data_c_gut, "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/combined_data_c_S.csv", row.names = TRUE)
+combined_data_gut <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/combined_data_c_S.csv", row.names = 1)
+colnames(combined_data_gut) <- gsub("^X", "", colnames(combined_data_gut))
+colnames(combined_data_gut) <- gsub("_gutdb$", "", colnames(combined_data_gut))
+colnames(combined_data_gut) <- gsub("_downsampled$", "", colnames(combined_data_gut))
+colnames(combined_data_gut) <- sub("ZnD5\\.", "ZnD5-", colnames(combined_data_gut))
+combined_data_gut
+```
+
+#COMBINED DATA FOR OTHER TAXA LEVELS
+
+```{r}
+library(data.table)
+library(dplyr)
+
+# 🔹 Define input directories for each level
+level_paths <- list(
+  G = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/bracken_output_G_gutdb/",
+  F = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/bracken_output_F_gutdb/",
+  P = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/bracken_output_P_gutdb/"
+)
+
+# 🔹 Define output file paths
+output_paths <- list(
+  G = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/combined_data_ZnDZnA_G.csv",
+  F = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/combined_data_ZnDZnA_F.csv",
+  P = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/combined_data_ZnDZnA_P.csv"
+)
+
+# 🔹 Function to process each level
+process_bracken_level <- function(input_path, output_path) {
+  file_list <- list.files(path = input_path, pattern = "_bracken_output.txt", full.names = TRUE)
+  
+  bracken_list <- lapply(file_list, function(file) {
+    sample_name <- gsub("_bracken_output.txt", "", basename(file))
+    
+    data <- fread(file, header = TRUE, sep = "\t", quote = "") %>%
+      select(name, new_est_reads) %>%
+      rename_with(~ sample_name, .cols = new_est_reads)
+    
+    return(data)
+  })
+  
+  # Merge all on 'name' (taxon)
+  combined_data <- Reduce(function(x, y) merge(x, y, by = "name", all = TRUE), bracken_list)
+  combined_data[is.na(combined_data)] <- 0
+  
+  # ✅ Fix: save name column BEFORE removing it, and set as rownames
+  taxa_names <- combined_data$name
+  combined_data_matrix <- combined_data[, -1, drop = FALSE]
+  rownames(combined_data_matrix) <- taxa_names
+  
+  # Export with Taxa column
+  combined_data_out <- data.frame(Taxa = rownames(combined_data_matrix), combined_data_matrix, check.names = FALSE)
+  write.csv(combined_data_out, output_path, row.names = FALSE)
+  
+  return(combined_data_matrix)
+}
+
+
+# 🔹 Run the processing for each level
+combined_bracken_ZnD5_G <- process_bracken_level(level_paths$G, output_paths$G)
+combined_bracken_ZnD5_F <- process_bracken_level(level_paths$F, output_paths$F)
+combined_bracken_ZnD5_P <- process_bracken_level(level_paths$P, output_paths$P)
+
+# ✅ Done! You now have:
+# - combined_bracken_ZnD5_G  (Genus-level data)
+# - combined_bracken_ZnD5_F  (Family-level data)
+# - combined_bracken_ZnD5_P  (Phylum-level data)
+
+
+
+```
+
+
+#VISUALIZE READ DISTRIBUTION
+#BASED ON THE BELOW, READS WILL NOT BE RAREFIED
+```{r}
+
+# Calculate total reads per sample
+reads_per_sample <- colSums(combined_data_gut)
+
+# Create a data frame for plotting
+reads_df <- data.frame(
+  Sample = names(reads_per_sample),
+  Total_Reads = reads_per_sample
+)
+
+# Merge with metadata to get Treatment info
+reads_df <- merge(reads_df, metadata_ZnD5_gut[, c("Sample", "Treatment", "Location")], by = "Sample")
+reads_df$Group <- paste(reads_df$Treatment, reads_df$Location, sep = " ")
+reads_df$log10_Reads <- log10(reads_df$Total_Reads + 1)
+
+
+library(ggplot2)
+library(ggpubr)
+
+# Define group colors
+group_colors <- c(
+  "ZnD colon" = "#E69F00",
+  "ZnD intestine" = "#56B4E9",
+  "ZnD cecum" = "#009E73",
+  "ZnA colon" = "#F0E442",
+  "ZnA intestine" = "#0072B2",
+  "ZnA cecum" = "#D55E00"
+)
+
+# Plot
+reads_plot <- ggplot(reads_df, aes(x = Group, y = log10_Reads, fill = Group)) +
+  geom_boxplot(alpha = 0.7, width = 0.5) +
+  scale_fill_manual(values = group_colors) +
+  theme_minimal() +
+  labs(
+    title = "Total Read Counts per Sample\n by Treatment and Location\nMGBC DB",
+    x = "Group",
+    y = "Total Reads (log10 scale)"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 18),
+    axis.title.x = element_text(face = "bold", size = 16),
+    axis.text.x = element_text(size = 14, face = "bold", angle = 45, hjust = 1),
+    axis.title.y = element_text(face = "bold", size = 16),
+    legend.position = "none"
+  ) +
+  stat_compare_means(method = "kruskal.test", label.y = max(reads_df$log10_Reads) * 1.1) +  # Kruskal-Wallis at top
+  stat_compare_means(
+    comparisons = list(
+      c("ZnA colon", "ZnA cecum"),
+      c("ZnA intestine", "ZnA cecum"),
+      c("ZnD cecum", "ZnA cecum"),
+      c("ZnD colon", "ZnA cecum"),
+      c("ZnD intestine", "ZnA cecum"),
+      c("ZnA colon", "ZnA intestine"),
+      c("ZnA colon", "ZnD cecum"),
+      c("ZnD colon", "ZnA colon"),
+      c("ZnA colon", "ZnD intestine"),
+      c("ZnD cecum", "ZnA intestine"),
+      c("ZnD colon", "ZnA intestine"),
+      c("ZnD intestine", "ZnA intestine"),
+      c("ZnD colon", "ZnD cecum"),
+      c("ZnD intestine", "ZnD cecum"),
+      c("ZnD colon", "ZnD intestine")
+    ),
+    method = "wilcox.test",
+    label = "p.signif",
+    hide.ns = FALSE
+  )
+
+print(reads_plot)
+
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/read_distribution_by_treatment_location.png", plot = reads_plot, width = 8, height = 6, dpi = 300)
+
+```
+
+```{r}
+combined_data_c_F <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/combined_data_c_F.csv", header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
+combined_data_c_G <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/combined_data_c_G.csv", header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
+combined_data_c_P <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/combined_data_c_P.csv", header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
+
+combined_data_gut <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/combined_data_c_S.csv", row.names = 1)
+colnames(combined_data_gut) <- gsub("^X", "", colnames(combined_data_gut))
+colnames(combined_data_gut) <- gsub("_gutdb$", "", colnames(combined_data_gut))
+colnames(combined_data_gut) <- gsub("_downsampled$", "", colnames(combined_data_gut))
+colnames(combined_data_gut) <- sub("ZnD5\\.", "ZnD5-", colnames(combined_data_gut))
+colnames(combined_data_gut) <- gsub("-", ".", colnames(combined_data_gut))
+
+combined_data_gut
+
+
+
+# Define a cleaning function
+clean_combined_data <- function(df) {
+  # Step 1: Set the first column as rownames
+  rownames(df) <- df[,1]
+  df <- df[,-1]
+  
+  # Step 2: Clean column names
+  colnames(df) <- gsub("_gutdb_report\\.txt$", "", colnames(df))  # Remove suffix
+  colnames(df) <- gsub("-", ".", colnames(df))  # Replace dash with dot
+  
+  return(df)
+}
+
+# Apply to all three dataframes
+combined_data_c_G <- clean_combined_data(combined_data_c_G)
+combined_data_c_F <- clean_combined_data(combined_data_c_F)
+combined_data_c_P <- clean_combined_data(combined_data_c_P)
+
+
+combined_data_gut
+combined_data_c_G
+combined_data_c_F 
+combined_data_c_P
+metadata_ZnD5_gut
+```
+#GET THE MOST ABUNDANT TAXA RANKED PER LOCATION 
+
+```{r}
+# Load required libraries
+library(dplyr)
+library(tibble)
+
+# Function to rank top taxa per location
+rank_top_taxa_by_location <- function(count_data, metadata, top_n = 20) {
+  # Ensure columns match metadata
+  sample_names <- colnames(count_data)
+  sample_names <- sample_names[sample_names %in% metadata$Sample]
+  
+  # Subset metadata and count data
+  metadata_sub <- metadata %>% filter(Sample %in% sample_names)
+  count_data_sub <- count_data[, metadata_sub$Sample]
+  
+  # Make sure order matches
+  count_data_sub <- count_data_sub[, metadata_sub$Sample]
+  
+  # Add Taxa back as a column
+  count_data_sub <- rownames_to_column(as.data.frame(count_data_sub), var = "Taxa")
+  
+  # Melt to long format
+  long_df <- tidyr::pivot_longer(count_data_sub, cols = -Taxa, names_to = "Sample", values_to = "Abundance")
+  
+  # Merge with metadata
+  long_df <- left_join(long_df, metadata[, c("Sample", "Location")], by = "Sample")
+  
+  # Summarize: mean abundance per taxon per location
+  summary_df <- long_df %>%
+    group_by(Location, Taxa) %>%
+    summarize(MeanAbundance = mean(Abundance), .groups = "drop") %>%
+    arrange(Location, desc(MeanAbundance))
+  
+  # Get top taxa for each location
+  top_taxa_by_location <- summary_df %>%
+    group_by(Location) %>%
+    slice_max(MeanAbundance, n = top_n) %>%
+    ungroup()
+  
+  return(top_taxa_by_location)
+}
+
+ranked_bacteria_S <- rank_top_taxa_by_location(combined_data_gut, metadata_ZnD5_gut)
+ranked_bacteria_G <- rank_top_taxa_by_location(combined_data_c_G, metadata_ZnD5_gut)
+ranked_bacteria_F <- rank_top_taxa_by_location(combined_data_c_F, metadata_ZnD5_gut)
+ranked_bacteria_P <- rank_top_taxa_by_location(combined_data_c_P, metadata_ZnD5_gut)
+
+ranked_bacteria_S
+ranked_bacteria_G
+ranked_bacteria_F
+ranked_bacteria_P
+
+write.csv(ranked_bacteria_S, "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/ranked_bacteria_S_gutdb.csv", row.names = TRUE)
+write.csv(ranked_bacteria_G, "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/ranked_bacteria_G_gutdb.csv", row.names = TRUE)
+write.csv(ranked_bacteria_F, "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/ranked_bacteria_F_gutdb.csv", row.names = TRUE)
+write.csv(ranked_bacteria_P, "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/ranked_bacteria_P_gutdb.csv", row.names = TRUE)
+```
+
+
+
+#MAKE A PCOA PLOT 
+
+```{r}
+# Load required libraries
+library(ggplot2)
+library(vegan)    # For Bray-Curtis distance
+library(dplyr)    # Data manipulation
+library(janitor)  # Cleaning column names
+library(ggrepel)  # For sample labels
+# Replace dashes with periods in column names
+colnames(combined_data_gut) <- gsub("-", ".", colnames(combined_data_gut))
+
+# 🔹 Merge transposed counts with metadata
+pcoa_input <- merge(t(combined_data_gut), metadata_ZnD5_gut, by.x = "row.names", by.y = "Sample")
+pcoa_input
+colnames(pcoa_input)[1] <- "Sample"  # Ensure first column is Sample
+as.data.frame(pcoa_input)
+# 🔹 Extract numerical abundance data
+pcoa_numeric <- pcoa_input[, !(colnames(pcoa_input) %in% c("Sample", "Treatment", "Location"))]
+#as.data.frame(pcoa_numeric)
+# Convert to numeric matrix
+pcoa_numeric <- apply(pcoa_numeric, 2, function(x) as.numeric(trimws(as.character(x))))
+pcoa_numeric <- as.matrix(pcoa_numeric)
+pcoa_numeric[is.na(pcoa_numeric)] <- 0  # Replace NAs with 0
+
+# 🔹 Normalize by total reads (relative abundance)
+row_sums <- rowSums(pcoa_numeric)
+print(sum(row_sums == 0))  # Check for zero rows
+pcoa_numeric <- pcoa_numeric / row_sums
+pcoa_numeric[!is.finite(pcoa_numeric)] <- 0  # Replace NaN/Inf
+
+# 🔹 Compute Bray-Curtis distance matrix
+rownames(pcoa_numeric) <- pcoa_input$Sample  # ✅ Assign correct rownames
+
+bray_curtis_dist <- vegdist(pcoa_numeric, method = "bray")
+as.data.frame(bray_curtis_dist) 
+# 🔹 Perform PCoA
+pcoa_result <- cmdscale(bray_curtis_dist, k = 2, eig = TRUE)
+
+# 🔹 Prepare PCoA scores dataframe
+pcoa_scores <- as.data.frame(pcoa_result$points)
+pcoa_scores
+colnames(pcoa_scores) <- c("PC1", "PC2")
+
+pcoa_scores$Sample <- rownames(pcoa_scores)
+pcoa_scores
+# Merge with metadata
+pcoa_scores <- merge(pcoa_scores, metadata_ZnD5_gut, by = "Sample")
+
+# 🔹 Calculate variance explained
+pc1_var <- round(100 * (pcoa_result$eig[1] / sum(pcoa_result$eig)), 1)
+pc2_var <- round(100 * (pcoa_result$eig[2] / sum(pcoa_result$eig)), 1)
+
+cat("PC1 Variance:", pc1_var, "%\n")
+cat("PC2 Variance:", pc2_var, "%\n")
+
+# 🔹 Create Group variable
+pcoa_scores$Group <- paste(pcoa_scores$Treatment, pcoa_scores$Location, sep = " ")
+pcoa_scores
+pcoa_scores$Group <- factor(pcoa_scores$Group, levels = c(
+  "ZnA intestine",
+  "ZnD intestine",
+  "ZnA cecum",
+  "ZnD cecum",
+  "ZnA colon",
+  "ZnD colon"
+))
+# 🔹 Define colors for the 6 groups
+group_colors <- c(
+  "ZnA intestine" = "#3E89BF",
+  "ZnD intestine" = "#56B4E9",
+  "ZnA cecum" = "#D55E00",
+  "ZnD cecum" = "#009E73",
+  "ZnA colon" = "#F0E442",
+  "ZnD colon" = "#E8B31A")
+
+
+# 🔹 PCoA Plot
+pcoa_plot_gut <- ggplot(pcoa_scores, aes(x = PC1, y = PC2, color = Group, fill = Group)) +
+  geom_point(size = 3, alpha = 0.8) +
+  stat_ellipse(geom = "polygon", alpha = 0.2) +
+  scale_color_manual(values = group_colors) +
+  scale_fill_manual(values = group_colors) +
+  theme_minimal() +
+  labs(
+    title = "PCoA (Bray-Curtis)",
+    x = paste0("PC1 (", pc1_var, "%)"),
+    y = paste0("PC2 (", pc2_var, "%)"),
+    color = "Group"
+  ) +
+   theme(
+    legend.position = "right",
+    legend.title = element_text(size = 22, face = "bold"),
+    legend.text = element_text(size = 20),
+    panel.background = element_rect(fill = "white", color = "black"),
+    plot.title = element_text(face = "bold", size = 24),
+    axis.title.x = element_text(face = "bold", size = 20),
+    axis.title.y = element_text(face = "bold", size = 20)
+  )
+
+# 🔹 Save and print the plot
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/PCA/pcoa_gut_samples.png",
+       plot = pcoa_plot_gut, width = 8, height = 6, dpi = 300)
+pcoa_plot_gut
+
+
+```
+
+#PCOA PLOTS FOR COLON, INTESTINE, AND CECUM
+
+```{r}
+# 🔹 Set Location as a factor to control legend order
+pcoa_scores$Location <- factor(pcoa_scores$Location, levels = c("intestine", "cecum", "colon"))
+
+# 🔹 Define your location-specific colors
+location_colors <- c(
+  "intestine" = "#56B4E9",
+  "cecum" = "#009E73",
+  "colon" = "#D55E00"
+)
+
+# 🔹 Plot grouped by Location only
+pcoa_plot_location <- ggplot(pcoa_scores, aes(x = PC1, y = PC2, color = Location, fill = Location)) +
+  geom_point(size = 3, alpha = 0.8) +
+  stat_ellipse(geom = "polygon", alpha = 0.2) +
+  scale_color_manual(values = location_colors) +
+  scale_fill_manual(values = location_colors) +
+  theme_minimal() +
+  labs(
+    title = "PCoA (Bray-Curtis)",
+    x = paste0("PC1 (", pc1_var, "%)"),
+    y = paste0("PC2 (", pc2_var, "%)"),
+    color = "Region",
+    fill = "Region"
+  ) +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 22, face = "bold"),
+    legend.text = element_text(size = 20),
+    panel.background = element_rect(fill = "white", color = "black"),
+    plot.title = element_text(face = "bold", size = 24),
+    axis.title.x = element_text(face = "bold", size = 20),
+    axis.title.y = element_text(face = "bold", size = 20)
+  )
+
+# 🔹 Save the plot
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/PCA/pcoa_by_location.png",
+       plot = pcoa_plot_location, width = 8, height = 6, dpi = 300)
+
+# 🔹 Print the plot
+pcoa_plot_location
+
+```
+
+
+```{r}
+run_pcoa_plot <- function(counts_matrix, metadata_df, subset_condition = NULL, plot_title = "PCoA Plot", save_path = NULL) {
+  library(ggplot2)
+  library(vegan)
+  
+  # Optional: Subset metadata
+  if (!is.null(subset_condition)) {
+    metadata_df <- metadata_df %>% filter(!!rlang::parse_expr(subset_condition))
+  }
+  
+  # Subset counts to only relevant samples
+  sample_ids <- metadata_df$Sample
+  subset_counts <- counts_matrix[, sample_ids, drop = FALSE]
+  
+  # Transpose + merge
+  pcoa_input <- merge(t(subset_counts), metadata_df, by.x = "row.names", by.y = "Sample")
+  colnames(pcoa_input)[1] <- "Sample"
+  
+  # Extract and process numeric matrix
+  pcoa_numeric <- pcoa_input[, !(colnames(pcoa_input) %in% c("Sample", "Treatment", "Location"))]
+  pcoa_numeric <- apply(pcoa_numeric, 2, function(x) as.numeric(trimws(as.character(x))))
+  pcoa_numeric <- as.matrix(pcoa_numeric)
+  pcoa_numeric[is.na(pcoa_numeric)] <- 0
+  rownames(pcoa_numeric) <- pcoa_input$Sample
+  pcoa_numeric <- pcoa_numeric / rowSums(pcoa_numeric)
+  pcoa_numeric[!is.finite(pcoa_numeric)] <- 0
+  
+  # Bray-Curtis & PCoA
+  bray_curtis_dist <- vegdist(pcoa_numeric, method = "bray")
+  pcoa_result <- cmdscale(bray_curtis_dist, k = 2, eig = TRUE)
+  
+  # Format scores
+  pcoa_scores <- as.data.frame(pcoa_result$points)
+  colnames(pcoa_scores) <- c("PC1", "PC2")
+  pcoa_scores$Sample <- rownames(pcoa_scores)
+  pcoa_scores <- merge(pcoa_scores, metadata_df, by = "Sample")
+  
+  # Variance explained
+  pc1_var <- round(100 * (pcoa_result$eig[1] / sum(pcoa_result$eig)), 1)
+  pc2_var <- round(100 * (pcoa_result$eig[2] / sum(pcoa_result$eig)), 1)
+  
+  # Define group colors
+  treatment_colors <- c("ZnD" = "#E69F00", "ZnA" = "#0072B2")
+  
+  # Plot
+  p <- ggplot(pcoa_scores, aes(x = PC1, y = PC2, color = Treatment, fill = Treatment)) +
+    geom_point(size = 3, alpha = 0.8) +
+    stat_ellipse(geom = "polygon", alpha = 0.2) +
+    scale_color_manual(values = treatment_colors) +
+    scale_fill_manual(values = treatment_colors) +
+    theme_minimal() +
+    labs(
+      title = plot_title,
+      x = paste0("PC1 (", pc1_var, "%)"),
+      y = paste0("PC2 (", pc2_var, "%)"),
+      color = "Treatment"
+    ) +
+    theme(
+    legend.position = "right",
+    legend.title = element_text(size = 22, face = "bold"),
+    legend.text = element_text(size = 20),
+    panel.background = element_rect(fill = "white", color = "black"),
+    plot.title = element_text(face = "bold", size = 24),
+    axis.title.x = element_text(face = "bold", size = 20),
+    axis.title.y = element_text(face = "bold", size = 20)
+  )
+
+  # Save if path is provided
+  if (!is.null(save_path)) {
+    ggsave(save_path, plot = p, width = 8, height = 6, dpi = 300)
+  }
+  
+  return(p)
+}
+
+p_colon <- run_pcoa_plot(
+  counts_matrix = combined_data_gut,
+  metadata_df = metadata_ZnD5_gut,
+  subset_condition = 'Location == "colon"',
+  plot_title = "PCoA (Bray-Curtis) - Colon",
+  save_path = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/PCA/pcoa_colon.png"
+)
+
+p_cecum <- run_pcoa_plot(
+  counts_matrix = combined_data_gut,
+  metadata_df = metadata_ZnD5_gut,
+  subset_condition = 'Location == "cecum"',
+  plot_title = "PCoA (Bray-Curtis) - Cecum",
+  save_path = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/PCA/pcoa_cecum.png"
+)
+
+p_intestine <- run_pcoa_plot(
+  counts_matrix = combined_data_gut,
+  metadata_df = metadata_ZnD5_gut,
+  subset_condition = 'Location == "intestine"',
+  plot_title = "PCoA (Bray-Curtis) - Intestine",
+  save_path = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/PCA/pcoa_intestine.png"
+)
+
+p_treatment <- run_pcoa_plot(
+  counts_matrix = combined_data_gut,
+  metadata_df = metadata_ZnD5_gut,
+  plot_title = "PCoA (Bray-Curtis) - ZnD vs ZnA (All Locations)",
+  save_path = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/PCA/pcoa_treatment_all_locations.png"
+)
+
+```
+
+
+#CALCULATE SHANNON DIVERSITY, CHAO1 DIVERSITY, AND OBSERVED SPECIES IN MGBC DATABASE
+#Generate phyloseq object and make plots for diversity 
+
+```{r fig.height= 8}
+library(phyloseq)
+library(dplyr)
+library(tidyr)
+
+metadata_ZnD5_gut
+
+combined_data_gut
+
+
+# Prepare metadata
+metadata_phy <- metadata_ZnD5_gut
+rownames(metadata_phy) <- metadata_phy$Sample
+metadata_phy <- metadata_phy[, !(colnames(metadata_phy) == "Sample")]
+metadata_phy <- sample_data(metadata_phy)  # Convert to phyloseq sample_data object
+
+# Transpose rarefied counts so taxa are rows, samples are columns
+# Convert counts to matrix with taxa as rows
+otu_matrix <- as.matrix(combined_data_gut)
+otu_phy <- otu_table(otu_matrix, taxa_are_rows = TRUE)
+physeq_gut <- phyloseq(otu_phy, metadata_phy)
+
+diversity_data_gut <- estimate_richness(physeq_gut, measures = c("Observed", "Shannon", "Chao1"))
+
+# Merge with metadata for plotting
+metadata_gut <- as.data.frame(sample_data(physeq_gut))
+diversity_data_gut <- cbind(metadata_gut, diversity_data_gut)
+
+diversity_data_gut$Treatment <- factor(diversity_data_gut$Treatment, levels = c("ZnA", "ZnD"))
+
+```
+
+```{r}
+# Load required libraries
+library(ggplot2)
+library(vegan)
+library(dplyr)
+library(janitor)
+library(ggrepel)
+library(phyloseq)
+library(tidyr)
+library(ggpubr)
+
+# Define directories
+data_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/DiversityPlots/"
+figures_dir <- file.path(data_dir, "figures")
+diversity_fig_dir <- file.path(figures_dir)
+
+# Load metadata
+metadata <- metadata_ZnD5_gut
+
+# Define color palette for Location
+location_colors <- c(
+  "colon" = "#D55E00",
+  "intestine" = "#56B4E9",
+  "cecum" = "#009E73"
+)
+
+# Define significant comparisons for combined_data_gut
+#signif_comparisons_observed <- list(c("colon", "intestine"))
+#signif_comparisons_shannon  <- list(c("cecum", "intestine"), c("colon", "intestine"))
+#signif_comparisons_chao1    <- list(c("colon", "intestine"))
+
+# Define function to compute and plot diversity by location
+compute_diversity_for_combined_data_gut <- function(data, metadata, kingdom_label,
+                                                    signif_comparisons_observed,
+                                                    signif_comparisons_shannon,
+                                                    signif_comparisons_chao1) {
+  
+  # Convert to numeric matrix
+  data_matrix <- as.matrix(data)
+  mode(data_matrix) <- "numeric"
+  
+  # Match sample metadata
+  rownames(metadata) <- metadata$Sample
+  metadata_phy <- sample_data(metadata)
+  
+  # Create phyloseq object
+  otu_table_phy <- otu_table(data_matrix, taxa_are_rows = TRUE)
+  physeq <- phyloseq(otu_table_phy, metadata_phy)
+  
+  # Compute diversity metrics
+  diversity_data <- estimate_richness(physeq, measures = c("Observed", "Shannon", "Chao1"))
+  diversity_data <- cbind(as.data.frame(sample_data(physeq)), diversity_data)
+  
+  # Set location order
+  diversity_data$Location <- factor(diversity_data$Location, levels = c("intestine", "cecum", "colon"))
+  
+  # Plotting function
+  plot_diversity_metric <- function(metric, y_label) {
+  ggplot(diversity_data, aes(x = Location, y = get(metric), fill = Location)) +
+    geom_boxplot(alpha = 0.7, outlier.shape = NA, width = 0.8) +
+    geom_jitter(width = 0.15, alpha = 0.5, size = 1.5) +
+    scale_fill_manual(values = location_colors) +
+    stat_compare_means(
+      method = "wilcox.test",
+      comparisons = list(
+        c("intestine", "cecum"),
+        c("intestine", "colon"),
+        c("cecum", "colon")
+      ),
+      label = "p.signif",
+      size = 5
+    ) +
+    theme_minimal() +
+    labs(
+      title = "",
+      x = "",
+      y = y_label
+    ) +
+    theme(
+      plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+      axis.title.x = element_text(size = 16, face = "bold"),
+      axis.title.y = element_text(size = 16, face = "bold"),
+      axis.text.x = element_text(size = 14, face = "bold", color = "black", angle = 45, hjust = 1),
+      axis.text.y = element_text(size = 14, color = "black"),
+      legend.position = "none"
+    ) + 
+    coord_cartesian(clip = "off", expand = FALSE)
+}
+
+  
+  # Generate plots
+observed_plot <- plot_diversity_metric("Observed", "Number of Observed Species")
+shannon_plot  <- plot_diversity_metric("Shannon", "Shannon Diversity Index")
+chao1_plot    <- plot_diversity_metric("Chao1", "Chao1 Index")
+
+  
+  # Save plots
+  #ggsave(file.path(diversity_fig_dir, paste0("observed_", kingdom_label, "_gut_by_location.png")), plot = observed_plot, width = 1.6, height = 5.5, dpi = 300, units = "in")
+  #ggsave(file.path(diversity_fig_dir, paste0("shannon_", kingdom_label, "_gut_by_location.png")), plot = shannon_plot, width = 1.6, height = 5.5, dpi = 300, units = "in")
+ # ggsave(file.path(diversity_fig_dir, paste0("chao1_", kingdom_label, "_gut_by_location.png")), plot = chao1_plot, width = 1.6, height = 5.5, dpi = 300, units = "in")
+  
+  # Print plots
+  print(observed_plot)
+  print(shannon_plot)
+  print(chao1_plot)
+}
+
+# 🔹 Run for combined_data_gut
+compute_diversity_for_combined_data_gut(combined_data_gut, metadata_ZnD5_gut, "Combined",
+                                        signif_comparisons_observed,
+                                        signif_comparisons_shannon,
+                                        signif_comparisons_chao1)
+
+# Genus level
+compute_diversity_for_combined_data_gut(combined_data_c_G, metadata_ZnD5_gut, "Genus", NULL, NULL, NULL)
+
+# Family level
+compute_diversity_for_combined_data_gut(combined_data_c_F, metadata_ZnD5_gut, "Family", NULL, NULL, NULL)
+
+# Phylum level
+compute_diversity_for_combined_data_gut(combined_data_c_P, metadata_ZnD5_gut, "Phylum", NULL, NULL, NULL)
+
+
+```
+
+#JUNE 16, 2025, STACKED BAR CHARTS FOR MGBC DATABASE
+
+```{r}
+# Load required libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggpubr)
+
+# Fix sample names if needed
+
+# 🔹 Define function
+generate_stacked_bar_chart_by_location <- function(data, metadata, title, output_path) {
+  data$Taxa <- rownames(data)
+  
+  long_data <- data %>%
+    pivot_longer(cols = -Taxa, names_to = "Sample", values_to = "Abundance") %>%
+    left_join(metadata, by = "Sample")
+  
+  long_data$Location <- factor(long_data$Location, levels = c("intestine", "cecum", "colon"))
+  
+  long_data <- long_data %>%
+    group_by(Sample) %>%
+    mutate(Relative_Abundance = Abundance / sum(Abundance, na.rm = TRUE)) %>%
+    ungroup()
+  
+  summarized_data <- long_data %>%
+    group_by(Location, Taxa) %>%
+    summarise(Mean_Abundance = mean(Relative_Abundance, na.rm = TRUE), .groups = "drop")
+  
+  top_30_taxa_per_location <- summarized_data %>%
+    group_by(Location) %>%
+    arrange(desc(Mean_Abundance)) %>%
+    slice_head(n = 30)
+  
+  summarized_data_filtered <- summarized_data %>%
+    semi_join(top_30_taxa_per_location, by = c("Location", "Taxa"))
+  
+  color_palette <- colorRampPalette(c(
+    "#E8B31A", "#56B4E9", "#009E73", "#F0E442", 
+    "#75AE33", "#D55E00", "#CC79A7"
+  ))(55)
+  
+  plot <- ggplot(summarized_data_filtered, aes(x = Location, y = Mean_Abundance, fill = Taxa)) +
+    geom_bar(stat = "identity", position = "fill", color = "black", width = 0.6) +
+    scale_fill_manual(values = color_palette) +
+    theme_minimal() +
+    labs(
+      title = title,
+      x = "Location",
+      y = "Relative Abundance",
+      fill = "Taxa"
+    ) +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 17, face = "bold"),
+      axis.title.x = element_text(size = 16, face = "bold"),
+      axis.title.y = element_text(size = 16, face = "bold"),
+      axis.text.x = element_text(size = 14, face = "bold", angle = 45, hjust = 1),
+      axis.text.y = element_text(size = 14, face = "bold"),
+      legend.title = element_text(size = 14, face = "bold"),
+      legend.text = element_text(size = 8, face = "bold"),
+      legend.key.size = unit(0.5, "cm"),
+      legend.spacing.x = unit(0.2, "cm"),
+      legend.box = "horizontal"
+    ) +
+    guides(fill = guide_legend(ncol = 2, byrow = TRUE))
+  
+  ggsave(output_path, plot = plot, width = 6, height = 6, dpi = 300)
+  return(plot)
+}
+
+# 🔹 Name mapping for titles
+name_mapping <- list(
+  "MGBC_G" = "MGBC Genus",
+  "MGBC_F" = "MGBC Family",
+  "MGBC_P" = "MGBC Phylum"
+)
+
+# 🔹 Datasets
+datasets <- list(
+  "MGBC_s" = combined_data_gut,
+  "MGBC_G" = combined_data_c_G,
+  "MGBC_F" = combined_data_c_F,
+  "MGBC_P" = combined_data_c_P
+)
+
+# 🔹 Output path
+output_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/StackedBarCharts/Location/June2025"
+
+# 🔹 Generate plots
+plots <- list()
+for (name in names(datasets)) {
+  dataset <- datasets[[name]]
+  dataset <- dataset[, colnames(dataset) %in% metadata_ZnD5_gut$Sample, drop = FALSE]
+  readable_name <- name_mapping[[name]]
+  output_path <- file.path(output_dir, paste0("stacked_bar_by_location_", name, ".png"))
+  
+  if (ncol(dataset) > 0) {
+    plots[[paste(name, "location", sep = "_")]] <- generate_stacked_bar_chart_by_location(
+      dataset,
+      metadata_ZnD5_gut,
+      paste(readable_name),
+      output_path
+    )
+  }
+}
+metadata_ZnD5_gut
+plots
+
+```
+
+
+
+
+```{r}
+library(phyloseq)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+
+# Compute diversity metrics
+diversity_data_gut <- estimate_richness(physeq_gut, measures = c("Observed", "Shannon", "Chao1"))
+
+# Extract and combine metadata
+metadata_gut <- as.data.frame(sample_data(physeq_gut))
+diversity_data_gut <- cbind(metadata_gut, diversity_data_gut)
+
+diversity_data_gut$Treatment <- factor(diversity_data_gut$Treatment, levels = c("ZnA", "ZnD"))
+
+custom_colors <- c(
+  "ZnA" = "#0072B2",  # Blue
+  "ZnD" = "#E69F00"   # Orange
+)
+pairwise_comparisons <- list(c("ZnA", "ZnD"))
+get_significant_comparisons <- function(metric) {
+  group1 <- diversity_data_gut %>% filter(Treatment == "ZnA") %>% pull(metric)
+  group2 <- diversity_data_gut %>% filter(Treatment == "ZnD") %>% pull(metric)
+  test_result <- wilcox.test(group1, group2)
+  if (test_result$p.value < 0.05) {
+    return(list(c("ZnA", "ZnD")))
+  } else {
+    return(list())  # No sig comparisons
+  }
+}
+plot_diversity_metric <- function(metric, y_label, title) {
+  sig_comps <- get_significant_comparisons(metric)
+  
+  ggplot(diversity_data_gut, aes(x = Treatment, y = get(metric), fill = Treatment)) +
+    geom_boxplot(alpha = 0.7, outlier.shape = NA, width = 0.4) +
+    geom_jitter(width = 0.15, alpha = 0.5, size = 1.5) +  
+    scale_fill_manual(values = custom_colors) +
+    theme_minimal() +
+    labs(title = title, x = "Treatment Group", y = y_label) +
+    theme(
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+      axis.title.x = element_text(size = 16, face = "bold"),
+      axis.title.y = element_text(size = 16, face = "bold"),
+      axis.text.x = element_text(size = 14, face = "bold", color = "black"),
+      axis.text.y = element_text(size = 14, color = "black"),
+      legend.title = element_text(size = 18, face = "bold"),
+      legend.text = element_text(size = 16)
+    ) +
+    stat_compare_means(method = "kruskal.test", label.y = max(diversity_data_gut[[metric]], na.rm = TRUE) * 1.1, size = 5, label = "p.format")
+    #stat_compare_means(comparisons = sig_comps, method = "wilcox.test", label = "p.signif", hide.ns = TRUE)
+}
+shannon_plot <- plot_diversity_metric("Shannon", "Shannon Diversity Index", "Shannon Diversity")
+chao1_plot <- plot_diversity_metric("Chao1", "Chao1 Index", "Chao1 Index")
+observed_plot <- plot_diversity_metric("Observed", "Observed Species", "Observed Species")
+
+
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/DiversityPlots/shannon_diversity_plot_gut.png", plot = shannon_plot, width = 4, height = 5, dpi = 300)
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/DiversityPlots/chao1_diversity_plot_gut.png", plot = chao1_plot, width = 4, height = 5, dpi = 300)
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/DiversityPlots/observed_species_plot_gut.png", plot = observed_plot, width = 4, height = 5, dpi = 300)
+
+
+```
+
+#LOCATION SPECIFIC DIVERSITY PLOTS 
+
+```{r}
+plot_diversity_by_location <- function(location_name, metric, y_label, title, save_filename) {
+  # Subset for location
+  df_loc <- diversity_data_gut %>% filter(Location == location_name)
+  
+  # Wilcoxon test for ZnA vs ZnD at this location
+  group1 <- df_loc %>% filter(Treatment == "ZnA") %>% pull(metric)
+  group2 <- df_loc %>% filter(Treatment == "ZnD") %>% pull(metric)
+  test_result <- wilcox.test(group1, group2)
+  
+  sig_comps <- if (test_result$p.value < 0.05) list(c("ZnA", "ZnD")) else list()
+  
+  # Plot
+  p <- ggplot(df_loc, aes(x = Treatment, y = get(metric), fill = Treatment)) +
+    geom_boxplot(alpha = 0.7, outlier.shape = NA, width = 0.4) +
+    geom_jitter(width = 0.15, alpha = 0.5, size = 1.5) +  
+    scale_fill_manual(values = custom_colors) +
+    theme_minimal() +
+    labs(title = title, x = "Treatment Group", y = y_label) +
+    theme(
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+      axis.title.x = element_text(size = 16, face = "bold"),
+      axis.title.y = element_text(size = 16, face = "bold"),
+      axis.text.x = element_text(size = 14, face = "bold", color = "black"),
+      axis.text.y = element_text(size = 14, color = "black"),
+      legend.title = element_text(size = 18, face = "bold"),
+      legend.text = element_text(size = 16)
+    ) +
+    stat_compare_means(method = "kruskal.test", label.y =  max(df_loc[[metric]], na.rm = TRUE) * 1.1, size = 5, label = "p.format") #+
+    #stat_compare_means(comparisons = sig_comps, method = "wilcox.test", label = "p.signif", hide.ns = TRUE)
+  
+  # Save plot
+  ggsave(save_filename, plot = p, width = 4, height = 5, dpi = 300)
+  
+  return(p)
+}
+
+p_shannon_colon <- plot_diversity_by_location("colon", "Shannon", "Shannon Diversity Index", "Colon", 
+  "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/DiversityPlots/shannon_colon.png")
+
+p_chao1_colon <- plot_diversity_by_location("colon", "Chao1", "Chao1 Index", "Colon", 
+  "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/DiversityPlots/chao1_colon.png")
+
+p_observed_colon <- plot_diversity_by_location("colon", "Observed", "Observed Species", "Colon", 
+  "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/DiversityPlots/observed_colon.png")
+
+p_shannon_cecum <- plot_diversity_by_location("cecum", "Shannon", "Shannon Diversity Index", "Cecum", 
+  "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/DiversityPlots/shannon_cecum.png")
+
+p_chao1_cecum <- plot_diversity_by_location("cecum", "Chao1", "Chao1 Index", "Cecum", 
+  "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/DiversityPlots/chao1_cecum.png")
+
+p_observed_cecum <- plot_diversity_by_location("cecum", "Observed", "Observed Species", "Cecum", 
+  "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/DiversityPlots/observed_cecum.png")
+
+p_shannon_intestine <- plot_diversity_by_location("intestine", "Shannon", "Shannon Diversity Index", "Intestine", 
+  "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/DiversityPlots/shannon_intestine.png")
+
+p_chao1_intestine <- plot_diversity_by_location("intestine", "Chao1", "Chao1 Index", "Intestine", 
+  "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/DiversityPlots/chao1_intestine.png")
+
+p_observed_intestine <- plot_diversity_by_location("intestine", "Observed", "Observed Species", "Intestine", 
+  "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/DiversityPlots/observed_intestine.png")
+
+print(p_shannon_colon); print(p_chao1_colon); print(p_observed_colon)
+print(p_shannon_cecum); print(p_chao1_cecum); print(p_observed_cecum)
+print(p_shannon_intestine); print(p_chao1_intestine); print(p_observed_intestine)
+
+```
+
+#MAKE STACKED BAR CHARTS 
+
+
+```{r}
+library(readr)
+
+combined_data_P <- read_csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/combined_data_c_P.csv") %>%
+  column_to_rownames(var = colnames(.)[1])
+combined_data_F <- read_csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/combined_data_c_F.csv") %>%
+  column_to_rownames(var = colnames(.)[1])
+combined_data_G <- read_csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/combined_data_c_G.csv") %>%
+  column_to_rownames(var = colnames(.)[1])
+combined_data_S <- read_csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/combined_data_c_S.csv") %>%
+  column_to_rownames(var = colnames(.)[1])
+
+combined_data_S
+combined_data_P
+combined_data_F
+combined_data_G
+metadata_ZnD5_gut
+
+datasets <- list(
+  "Phylum" = combined_data_P,
+  "Family" = combined_data_F,
+  "Genus" = combined_data_G,
+  "Species" = combined_data_S
+)
+
+locations <- c("colon", "cecum", "intestine")
+
+
+generate_bar_by_location <- function(data, metadata, location_name, level_name, output_prefix) {
+  # Subset metadata for location
+  meta_loc <- metadata %>% filter(Location == location_name)
+  samples_loc <- meta_loc$Sample
+
+  # Subset counts matrix
+  data_loc <- data[, colnames(data) %in% samples_loc, drop = FALSE]
+  data_loc$Taxa <- rownames(data_loc)
+
+  long_data <- data_loc %>%
+    pivot_longer(cols = -Taxa, names_to = "Sample", values_to = "Abundance") %>%
+    left_join(meta_loc, by = "Sample") %>%
+    group_by(Sample) %>%
+    mutate(Relative_Abundance = Abundance / sum(Abundance))
+
+  top_30_taxa <- long_data %>%
+    group_by(Taxa) %>%
+    summarise(Total_Abundance = sum(Relative_Abundance, na.rm = TRUE)) %>%
+    arrange(desc(Total_Abundance)) %>%
+    slice_head(n = 30) %>%
+    pull(Taxa)
+
+  filtered_data <- long_data %>% filter(Taxa %in% top_30_taxa)
+
+  summarized_data <- filtered_data %>%
+    group_by(Treatment, Taxa) %>%
+    summarise(Mean_Abundance = mean(Relative_Abundance, na.rm = TRUE), .groups = "drop")
+
+  summarized_data$Treatment <- factor(summarized_data$Treatment, levels = c("ZnA", "ZnD"))
+
+  color_palette <- colorRampPalette(RColorBrewer::brewer.pal(8, "Set3"))(30)
+
+  plot_with_legend <- ggplot(summarized_data, aes(x = Treatment, y = Mean_Abundance, fill = Taxa)) +
+    geom_bar(stat = "identity", position = "fill", color = "black", width = 0.4) +
+    scale_fill_manual(values = color_palette) +
+    theme_minimal() +
+    labs(
+      title = paste0(level_name, " - ", location_name),
+      x = "Treatment Group",
+      y = "Relative Abundance",
+      fill = "Taxa"
+    ) +
+    theme(
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+      legend.position = "right",
+      axis.title.x = element_text(size = 14, face = "bold"),
+      axis.title.y = element_text(size = 14, face = "bold"),
+      axis.text.x = element_text(size = 12, face = "bold", angle = 45, hjust = 1),
+      axis.text.y = element_text(size = 12),
+      legend.title = element_text(size = 14, face = "bold"),
+      legend.text = element_text(size = 12, face = "bold")
+    )
+
+  legend_only <- cowplot::get_legend(plot_with_legend)
+  plot_no_legend <- plot_with_legend + theme(legend.position = "none")
+
+  ggsave(paste0(output_prefix, "_barplot.png"), plot = plot_no_legend, width = 3.5, height = 6, dpi = 300)
+  png(paste0(output_prefix, "_legend.png"), width = 1500, height = 1000, res = 150)
+  grid::grid.newpage(); grid::grid.draw(legend_only); dev.off()
+}
+
+output_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/StackedBarCharts_ByLocation/"
+
+for (level_name in names(datasets)) {
+  for (loc in locations) {
+    output_prefix <- paste0(output_dir, "bar_", level_name, "_", loc)
+    generate_bar_by_location(datasets[[level_name]], metadata_ZnD5_gut, loc, level_name, output_prefix)
+  }
+}
+
+
+```
+
+#PERFORM DIFFERENTIAL EXPRESSION AT THE SPECIES, GENUS, FAMILY, AND PHYLUM LEVELS. AND THEN PERFORM DIFFERENTIAL EXPRESSION AGAIN AT THESE LEVELS, BUT SEPARATED BY LOCATION
+
+```{r}
+colnames(combined_data_S) <- gsub("_gutdb$", "", colnames(combined_data_S))
+colnames(combined_data_P) <- gsub("_gutdb_report.txt$", "", colnames(combined_data_P))
+colnames(combined_data_F) <- gsub("_gutdb_report.txt$", "", colnames(combined_data_F))
+colnames(combined_data_G) <- gsub("_gutdb_report.txt$", "", colnames(combined_data_G))
+metadata_phy_ZnD5_gut <- metadata_ZnD5_gut
+rownames(metadata_phy_ZnD5_gut) <- metadata_phy_ZnD5_gut$Sample
+
+filter_sparse_taxa <- function(data, threshold = 0.6) {
+  zero_counts <- rowSums(data == 0)  # Count number of zeros per taxa
+  keep_taxa <- zero_counts / ncol(data) < threshold  # Keep taxa with <50% zeros
+  return(data[keep_taxa, , drop = FALSE])
+}
+
+# Filter bacteria, fungi, and viruses before transposing for Maaslin2
+filtered_bacteria_S_gut <- filter_sparse_taxa(combined_data_S)
+filtered_bacteria_G_gut <- filter_sparse_taxa(combined_data_G)
+filtered_bacteria_F_gut <- filter_sparse_taxa(combined_data_F)
+filtered_bacteria_P_gut <- filter_sparse_taxa(combined_data_P)
+
+
+filtered_bacteria_S_gut
+filtered_bacteria_G_gut
+filtered_bacteria_F_gut
+filtered_bacteria_P_gut
+
+# Transpose for Maaslin2
+bacteria_transposed_gut <- as.data.frame(t(filtered_bacteria_S_gut))
+bacteria_transposed_G_gut <- as.data.frame(t(filtered_bacteria_G_gut))
+bacteria_transposed_F_gut <- as.data.frame(t(filtered_bacteria_F_gut))
+bacteria_transposed_P_gut <- as.data.frame(t(filtered_bacteria_P_gut))
+
+# Ensure numeric mode for Maaslin2
+bacteria_transposed_gut <- as.matrix(bacteria_transposed_gut)
+mode(bacteria_transposed_gut) <- "numeric"
+bacteria_transposed_G_gut <- as.matrix(bacteria_transposed_G_gut)
+mode(bacteria_transposed_G_gut) <- "numeric"
+bacteria_transposed_P_gut <- as.matrix(bacteria_transposed_P_gut)
+mode(bacteria_transposed_P_gut) <- "numeric"
+bacteria_transposed_F_gut <- as.matrix(bacteria_transposed_F_gut)
+mode(bacteria_transposed_F_gut) <- "numeric"
+
+# Replace the first period after "ZnD5" with a dash
+rownames(metadata_phy_ZnD5_gut) <- sub("ZnD5\\.", "ZnD5-", rownames(metadata_phy_ZnD5_gut))
+
+
+library(phyloseq)
+library(data.table)
+library(readr)
+library(tibble)
+masalin_results_bacteria_S_gut <- Maaslin2(
+  bacteria_transposed_gut,
+  metadata_phy_ZnD5_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/DifferentialExpression/masalin_results_bacteria_S", 
+  fixed_effects = c("Treatment")
+)
+
+masalin_results_bacteria_G_gut <- Maaslin2(
+  bacteria_transposed_G_gut,
+  metadata_phy_ZnD5_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/DifferentialExpression/masalin_results_bacteria_G", 
+  fixed_effects = c("Treatment")
+)
+
+masalin_results_bacteria_F_gut <- Maaslin2(
+  bacteria_transposed_F_gut,
+  metadata_phy_ZnD5_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/DifferentialExpression/masalin_results_bacteria_F", 
+  fixed_effects = c("Treatment")
+)
+
+masalin_results_bacteria_P_gut <- Maaslin2(
+  bacteria_transposed_P_gut,
+  metadata_phy_ZnD5_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/DifferentialExpression/masalin_results_bacteria_P", 
+  fixed_effects = c("Treatment")
+)
+```
+
+```{r}
+# Create the output directory if it doesn't exist
+output_path <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/DifferentialExpression/masalin_results_bacteria_S"
+if (!dir.exists(output_path)) {
+  dir.create(output_path, recursive = TRUE)
+}
+
+# Now run Maaslin2
+masalin_results_bacteria_S_gut <- Maaslin2(
+  bacteria_transposed_gut,
+  metadata_phy_ZnD5,
+  output = output_path,
+  fixed_effects = c("Treatment")
+)
+
+
+bacteria_transposed_gut
+metadata_phy_ZnD5_gut
+```
+
+#DIFFERENTIAL EXPRESSION SEPARATED BY LOCATION 
+
+```{r}
+# Load Maaslin2
+library(Maaslin2)
+library(dplyr)
+
+metadata_phy_ZnD5
+metadata_colon
+fungi_transposed
+
+# 1️⃣ **Filter metadata for each location**
+metadata_colon_gut <- metadata_phy_ZnD5_gut %>% filter(Location == "colon")
+metadata_intestine_gut  <- metadata_phy_ZnD5_gut %>% filter(Location == "intestine")
+metadata_cecum_gut  <- metadata_phy_ZnD5_gut %>% filter(Location == "cecum")
+
+# Replace the period after "ZnD5" with a dash in the Sample column
+metadata_colon_gut$Sample <- sub("ZnD5\\.", "ZnD5-", metadata_colon_gut$Sample)
+# Replace the period after "ZnD5" with a dash in the Sample column
+metadata_cecum_gut$Sample <- sub("ZnD5\\.", "ZnD5-", metadata_cecum_gut$Sample)
+# Replace the period after "ZnD5" with a dash in the Sample column
+metadata_intestine_gut$Sample <- sub("ZnD5\\.", "ZnD5-", metadata_intestine_gut$Sample)
+
+
+filter_data_by_location <- function(data, metadata) {
+  data_filtered <- data[rownames(data) %in% metadata$Sample, ]
+  return(data_filtered)
+}
+
+# **Filter Bacteria**
+bacteria_colon_gut <- filter_data_by_location(bacteria_transposed_gut, metadata_colon_gut)
+bacteria_intestine_gut <- filter_data_by_location(bacteria_transposed_gut, metadata_intestine_gut)
+bacteria_cecum_gut <- filter_data_by_location(bacteria_transposed_gut, metadata_cecum_gut)
+bacteria_colon_G_gut <- filter_data_by_location(bacteria_transposed_G_gut, metadata_colon_gut)
+bacteria_intestine_G_gut <- filter_data_by_location(bacteria_transposed_G_gut, metadata_intestine_gut)
+bacteria_cecum_G_gut <- filter_data_by_location(bacteria_transposed_G_gut, metadata_cecum_gut)
+bacteria_colon_F_gut <- filter_data_by_location(bacteria_transposed_F_gut, metadata_colon_gut)
+bacteria_intestine_F_gut <- filter_data_by_location(bacteria_transposed_F_gut, metadata_intestine_gut)
+bacteria_cecum_F_gut <- filter_data_by_location(bacteria_transposed_F_gut, metadata_cecum_gut)
+bacteria_colon_P_gut <- filter_data_by_location(bacteria_transposed_P_gut, metadata_colon_gut)
+bacteria_intestine_P_gut <- filter_data_by_location(bacteria_transposed_P_gut, metadata_intestine_gut)
+bacteria_cecum_P_gut <- filter_data_by_location(bacteria_transposed_P_gut, metadata_cecum_gut)
+
+
+bacteria_colon <- as.data.frame(bacteria_colon)
+metadata_colon
+
+bacteria_transposed_gut
+bacteria_colon_gut
+metadata_colon_gut
+# **Bacteria**
+
+Maaslin2(
+  bacteria_colon_gut,
+  metadata_colon_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database//DifferentialExpression/bacteria_colon_gut/",
+  fixed_effects = c("Treatment")
+)
+
+
+Maaslin2(
+  bacteria_intestine_gut,
+  metadata_intestine_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/DifferentialExpression/bacteria_intestine_gut/",
+  fixed_effects = c("Treatment")
+)
+
+Maaslin2(
+  bacteria_cecum_gut,
+  metadata_cecum_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/DifferentialExpression/bacteria_cecum_gut/",
+  fixed_effects = c("Treatment")
+)
+
+Maaslin2(
+  bacteria_colon_G_gut,
+  metadata_colon_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/DifferentialExpression/bacteria_colon_G_gut/",
+  fixed_effects = c("Treatment")
+)
+
+
+Maaslin2(
+  bacteria_intestine_G_gut,
+  metadata_intestine_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/DifferentialExpression/bacteria_intestine_G_gut/",
+  fixed_effects = c("Treatment")
+)
+
+Maaslin2(
+  bacteria_cecum_G_gut,
+  metadata_cecum_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/DifferentialExpression/bacteria_cecum_G_gut/",
+  fixed_effects = c("Treatment")
+)
+
+Maaslin2(
+  bacteria_colon_F_gut,
+  metadata_colon_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/DifferentialExpression/bacteria_colon_F_gut/",
+  fixed_effects = c("Treatment")
+)
+
+
+Maaslin2(
+  bacteria_intestine_F_gut,
+  metadata_intestine_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/DifferentialExpression/bacteria_intestine_F_gut/",
+  fixed_effects = c("Treatment")
+)
+
+Maaslin2(
+  bacteria_cecum_F_gut,
+  metadata_cecum_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/DifferentialExpression/bacteria_cecum_F_gut/",
+  fixed_effects = c("Treatment")
+)
+
+Maaslin2(
+  bacteria_colon_P_gut,
+  metadata_colon_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/DifferentialExpression/bacteria_colon_P_gut/",
+  fixed_effects = c("Treatment")
+)
+
+
+Maaslin2(
+  bacteria_intestine_P_gut,
+  metadata_intestine_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/DifferentialExpression/bacteria_intestine_P_gut/",
+  fixed_effects = c("Treatment")
+)
+
+Maaslin2(
+  bacteria_cecum_P_gut,
+  metadata_cecum_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/DifferentialExpression/bacteria_cecum_P_gut/",
+  fixed_effects = c("Treatment")
+)
+
+
+
+```
+
+#UP/DOWNREGULATED TAXA OVERLAP IN THE COLON, INTESTINE, AND CECUM
+
+```{r}
+library(ComplexHeatmap)
+library(RColorBrewer)
+library(dplyr)
+library(readr)
+library(tibble)
+
+# Base path for differential expression results
+base_path <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/DifferentialExpression"
+
+# Heatmap output directory
+heatmap_output_dir <- file.path(base_path, "Heatmaps_gut")
+dir.create(heatmap_output_dir, showWarnings = FALSE, recursive = TRUE)
+
+# Load metadata (with correct sample names)
+metadata <- metadata_phy_ZnD5_gut
+
+# Heatmap generator function
+generate_heatmap <- function(results_path, expression_data, metadata, output_name) {
+  
+  cat("🔍 Processing:", results_path, "\n")
+  
+  if (!file.exists(results_path)) {
+    cat("❌ Skipping:", results_path, "- File not found\n")
+    return(NULL)
+  }
+  
+  # Read Maaslin2 results
+  results_data <- read.delim(results_path)
+  # Standardize taxa names in results and expression data
+  standardize_names <- function(x) {
+    x %>%
+      gsub("[._ -]", "", .) %>%
+      tolower()
+  }
+  
+  # Select significant taxa (p < 0.05)
+  results_data_sig <- results_data %>% filter(pval < 0.05)
+  
+  # Standardized feature and row names
+  standardized_taxa <- standardize_names(results_data_sig$feature)
+  standardized_rows <- standardize_names(rownames(expression_data))
+  
+  # Find intersected taxa
+  matched_indices <- which(standardized_rows %in% standardized_taxa)
+  
+  # Filter expression data
+  expression_data <- expression_data[matched_indices, , drop = FALSE]
+  
+  # Optional: restore readable rownames using original rownames
+  if (nrow(expression_data) > 0) {
+    rownames(expression_data) <- rownames(expression_data)
+  } else {
+    cat("❌ Skipping:", output_name, "- No matching taxa in expression data\n")
+    return(NULL)
+  }
+  
+    
+  # Z-score transform
+  compute_zscore <- function(mat) {
+    apply(mat, 1, function(x) (x - mean(x)) / sd(x))
+  }
+  z_score_data <- t(compute_zscore(as.matrix(expression_data)))
+  
+  # Match samples to metadata
+  sample_treatments <- metadata[colnames(z_score_data), , drop = FALSE]
+  if (nrow(sample_treatments) == 0) {
+    cat("❌ Skipping:", output_name, "- No matching sample names in metadata\n")
+    return(NULL)
+  }
+  
+  # Annotate Treatment group
+  treatment_colors <- c("ZnD" = "#E69F00", "ZnA" = "#56B4E9")
+  column_annot <- HeatmapAnnotation(
+    Treatment = factor(sample_treatments$Treatment, levels = c("ZnD", "ZnA")),
+    col = list(Treatment = treatment_colors),
+    annotation_name_side = "left"
+  )
+  
+  # Clean sample names
+  colnames(z_score_data) <- sub("^(\\d+_ZnD5\\.[A-Za-z]+\\d+).*", "\\1", colnames(z_score_data))
+  colnames(z_score_data) <- sub("ZnD5\\.", "ZnD5-", colnames(z_score_data))
+  
+  # Order columns by treatment
+  sample_treatments$Sample <- colnames(z_score_data)
+  ordered_samples <- sample_treatments %>%
+    arrange(factor(Treatment, levels = c("ZnD", "ZnA"))) %>%
+    pull(Sample)
+  z_score_data <- z_score_data[, ordered_samples]
+  
+  # Color palette
+  heatmap_colors <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(100)
+  
+  # Plot
+  heatmap_plot <- Heatmap(
+    z_score_data,
+    name = "Z-score",
+    col = heatmap_colors,
+    cluster_rows = FALSE,
+    cluster_columns = FALSE,
+    column_split = sample_treatments$Treatment,
+    show_row_names = TRUE,
+    show_column_names = TRUE,
+    row_names_side = "left",
+    column_title = paste(output_name),
+    top_annotation = column_annot,
+    column_names_gp = gpar(fontsize = 12, fontface = "bold"),
+    row_names_gp = gpar(fontsize = 12, fontface = "bold"),
+    column_title_gp = gpar(fontsize = 16, fontface = "bold"),
+    heatmap_legend_param = list(
+      title = "Z-score",
+      title_gp = gpar(fontsize = 14, fontface = "bold"),
+      labels_gp = gpar(fontsize = 12, fontface = "bold")
+    )
+  )
+  
+  # Save plot
+  output_file <- file.path(heatmap_output_dir, paste0("heatmap_", output_name, ".png"))
+  png(output_file, width = 1200, height = 900, res = 150)
+  draw(heatmap_plot)
+  dev.off()
+  
+  cat("✅ Saved heatmap for:", output_name, "\n")
+}
+
+
+```
+
+```{r}
+generate_heatmap(
+  results_path = file.path(base_path, "bacteria_colon_gut/all_results.tsv"),
+  expression_data = bacteria_colon_gut,
+  metadata = metadata_colon_gut,
+  output_name = "bacteria_colon_gut"
+)
+
+generate_heatmap(
+  results_path = file.path(base_path, "bacteria_intestine_gut/all_results.tsv"),
+  expression_data = bacteria_intestine_gut,
+  metadata = metadata_intestine_gut,
+  output_name = "bacteria_intestine_gut"
+)
+
+generate_heatmap(
+  results_path = file.path(base_path, "bacteria_cecum_gut/all_results.tsv"),
+  expression_data = bacteria_cecum_gut,
+  metadata = metadata_cecum_gut,
+  output_name = "bacteria_cecum_gut"
+)
+
+```
+```{r}
+bacteria_colon_gut
+```
+
+
+
+```{r}
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(cowplot)  # For get_legend
+
+# Load combined data (already created)
+datasets <- list(
+  "Virus Phyla" = combined_data_list$P,
+  "Virus Genera" = combined_data_list$G,
+  "Virus Families" = combined_data_list$F
+)
+
+metadata_clean <- metadata_ZnD5_gut
+rownames(metadata_clean) <- metadata_clean$Sample
+
+generate_stacked_bar_chart <- function(data, metadata, title, output_prefix) {
+  data$Taxa <- rownames(data)
+  
+  long_data <- data %>%
+    pivot_longer(cols = -Taxa, names_to = "Sample", values_to = "Abundance") %>%
+    left_join(metadata, by = "Sample")
+  
+  long_data <- long_data %>%
+    group_by(Sample) %>%
+    mutate(Relative_Abundance = Abundance / sum(Abundance))
+
+  top_30_taxa <- long_data %>%
+    group_by(Taxa) %>%
+    summarise(Total_Abundance = sum(Relative_Abundance, na.rm = TRUE)) %>%
+    arrange(desc(Total_Abundance)) %>%
+    slice_head(n = 30) %>%
+    pull(Taxa)
+
+  filtered_data <- long_data %>% filter(Taxa %in% top_30_taxa)
+
+  summarized_data <- filtered_data %>%
+    group_by(Treatment, Taxa) %>%
+    summarise(Mean_Abundance = mean(Relative_Abundance, na.rm = TRUE), .groups = "drop")
+
+  summarized_data$Treatment <- factor(summarized_data$Treatment, levels = c("ZnA", "ZnD"))
+
+  color_palette <- colorRampPalette(RColorBrewer::brewer.pal(8, "Set3"))(30)
+
+  plot_with_legend <- ggplot(summarized_data, aes(x = Treatment, y = Mean_Abundance, fill = Taxa)) +
+    geom_bar(stat = "identity", position = "fill", color = "black", width = 0.4) +
+    scale_fill_manual(values = color_palette) +
+    theme_minimal() +
+    labs(
+      title = title,
+      x = "Treatment Group",
+      y = "Relative Abundance",
+      fill = "Taxa"
+    ) +
+    theme(
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+      legend.position = "right",
+      axis.title.x = element_text(size = 14, face = "bold"),
+      axis.title.y = element_text(size = 14, face = "bold"),
+      axis.text.x = element_text(size = 12, face = "bold", angle = 45, hjust = 1),
+      axis.text.y = element_text(size = 12),
+      legend.title = element_text(size = 14, face = "bold"),
+      legend.text = element_text(size = 12, face = "bold")
+    )
+
+  legend_only <- get_legend(plot_with_legend)
+  plot_no_legend <- plot_with_legend + theme(legend.position = "none")
+
+  ggsave(paste0(output_prefix, "_barplot.png"), plot = plot_no_legend, width = 3.5, height = 6, dpi = 300)
+  png(paste0(output_prefix, "_legend.png"), width = 1500, height = 1000, res = 150)
+  grid::grid.newpage(); grid::grid.draw(legend_only); dev.off()
+
+  return(list(plot = plot_no_legend, legend = legend_only))
+}
+
+output_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/MGBC_Database/figures/StackedBarCharts/"
+
+plots <- list()
+for (name in names(datasets)) {
+  output_prefix <- paste0(output_dir, "stacked_bar_", gsub(" ", "_", name))
+  plots[[name]] <- generate_stacked_bar_chart(datasets[[name]], metadata_clean, paste("Stacked Bar Chart\n", name), output_prefix)
+}
+
+# View a plot
+print(plots[["Virus Phyla"]]$plot)
+
+```
+
+
+```{r}
+de_res_F_gut <- read.table("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/MGBC_Database/DifferentialExpression/FamilyLevel/masalin_results_F_refC_c_gut/all_results.tsv", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+de_res_F_gut$feature <- gsub("\\.", " ", de_res_F_gut$feature)
+de_res_F_gut
+de_res_G_gut <- read.table("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/MGBC_Database/DifferentialExpression/GenusLevel/masalin_results_G_refC_c_gut/all_results.tsv", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+de_res_G_gut$feature <- gsub("\\.", " ", de_res_G_gut$feature)
+de_res_G_gut
+de_res_S_gut <- read.table("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/MGBC_Database/DifferentialExpression/SpeciesLevel/Maaslin2_results_refC_c_gut/all_results.tsv", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+de_res_S_gut$feature <- gsub("\\.", " ", de_res_S_gut$feature)
+de_res_S_gut
+de_res_P_gut <- read.table("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/MGBC_Database/DifferentialExpression/PhylumLevel/masalin_results_P_refC_c_gut/all_results.tsv", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+de_res_P_gut$feature <- gsub("\\.", " ", de_res_P_gut$feature)
+de_res_P_gut
+
+
+
+get_top_taxa <- function(de_res) {
+  de_res <- de_res %>%
+    arrange(pval) %>%  # Sort by p-value
+    distinct(feature, .keep_all = TRUE)  # Keep only unique taxa
+  
+  top_taxa <- head(de_res$feature, 30)  # Select the top 30 unique taxa
+  return(top_taxa)
+}
+
+
+# Extract top taxa from each differential expression dataframe
+top_taxa_B_S_gut <- get_top_taxa(de_res_S_gut)
+top_taxa_B_G_gut <- get_top_taxa(de_res_G_gut)
+top_taxa_B_P_gut <- get_top_taxa(de_res_P_gut)
+top_taxa_B_F_gut <- get_top_taxa(de_res_F_gut)
+
+
+# Function to replace periods with spaces in taxa names
+# Function to replace periods with spaces in taxa names
+fix_taxa_names <- function(taxa_list) {
+  return(gsub("\\.", " ", taxa_list))
+}
+
+# Apply to all top taxa lists
+top_taxa_B_S_gut <- fix_taxa_names(top_taxa_B_S_gut)
+top_taxa_B_G_gut <- fix_taxa_names(top_taxa_B_G_gut)
+top_taxa_B_P_gut <- fix_taxa_names(top_taxa_B_P_gut)
+top_taxa_B_F_gut <- fix_taxa_names(top_taxa_B_F_gut)
+
+
+```
+
+#SUBSET READ COUNT DATA TO ONLY INCLUDE THE TOP SPECIES INCLUDED FROM ABOVE, TAXA THAT ARE DIFFERENTIALLY EXPRESSED AT THE SPECIFIED TAXA LEVEL FOR THE SPECIFIED KINGDOM
+
+```{r}
+
+# Function to subset combined read count data
+subset_combined_data <- function(combined_data, top_taxa) {
+  subset_data <- combined_data[rownames(combined_data) %in% top_taxa, ]
+  return(subset_data)
+}
+
+combined_bacteria_gut <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/MGBC_Database/combined_data_c_S.csv", header = TRUE, stringsAsFactors = FALSE)
+combined_G_gut <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/MGBC_Database/combined_data_bracken_G_c_gutdb.csv", header = TRUE, stringsAsFactors = FALSE)
+combined_P_gut <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/MGBC_Database/combined_data_bracken_P_c_gutdb.csv", header = TRUE, stringsAsFactors = FALSE)
+combined_F_gut <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/MGBC_Database/combined_data_bracken_F_c_gutdb.csv", header = TRUE, stringsAsFactors = FALSE)
+
+
+rownames(combined_bacteria_gut) <- combined_bacteria_gut[, 1]
+combined_bacteria_gut <- combined_bacteria_gut[, -1]
+colnames(combined_bacteria_gut) <- sub("^X", "", colnames(combined_bacteria_gut))
+
+rownames(combined_G_gut) <- combined_G_gut[, 1]
+combined_G_gut <- combined_G_gut[, -1]
+colnames(combined_G_gut) <- sub("^X", "", colnames(combined_G_gut))
+
+rownames(combined_P_gut) <- combined_P_gut[, 1]
+combined_P_gut <- combined_P_gut[, -1]
+colnames(combined_P_gut) <- sub("^X", "", colnames(combined_P_gut))
+
+rownames(combined_F_gut) <- combined_F_gut[, 1]
+combined_F_gut <- combined_F_gut[, -1]
+colnames(combined_F_gut) <- sub("^X", "", colnames(combined_F_gut))
+
+
+# Subset the data
+subset_B_S_gut <- subset_combined_data(combined_bacteria_gut, top_taxa_B_S_gut)
+subset_B_G_gut <- subset_combined_data(combined_G_gut, top_taxa_B_G_gut)
+subset_B_P_gut <- subset_combined_data(combined_P_gut, top_taxa_B_P_gut)
+subset_B_F_gut <- subset_combined_data(combined_F_gut, top_taxa_B_F_gut)
+
+
+subset_B_F_gut
+
+combined_bacteria_gut
+top_taxa_B_S_gut
+
+subset_B_S_gut
+
+```
+#COMPUTE RELATIVE ABUNDANCE AND Z-SCORES
+
+```{r}
+
+# Function to normalize data (convert to relative abundance and calculate Z-score)
+normalize_data <- function(subset_data) {
+  subset_data <- subset_data / rowSums(subset_data)  # Convert to relative abundance
+  z_scores <- t(scale(t(subset_data)))  # Compute Z-score per species
+  return(z_scores)
+}
+
+# Normalize all datasets
+z_B_S_gut <- normalize_data(subset_B_S_gut)
+z_B_G_gut <- normalize_data(subset_B_G_gut)
+z_B_P_gut <- normalize_data(subset_B_P_gut)
+z_B_F_gut <- normalize_data(subset_B_F_gut)
+
+
+z_B_F
+
+```
+#MATCH METADATA AND GROUP BY TREATMENT 
+
+```{r}
+metadata_filtered
+```
+
+
+```{r}
+# Function to match metadata and group by treatment
+group_by_treatment <- function(z_scores, metadata) {
+  # Ensure metadata matches the samples in the Z-score matrix
+  metadata_filtered <- metadata_DSS13_gut %>% filter(Sample %in% colnames(z_scores))
+  
+  # Match order
+  metadata_filtered <- metadata_filtered[match(colnames(z_scores), metadata_filtered$Sample), ]
+  
+  # Convert sample-wise data to treatment-wise averages
+  grouped_data <- as.data.frame(t(z_scores)) %>%
+    mutate(Treatment = metadata_filtered$Treatment) %>%
+    group_by(Treatment) %>%
+    summarise_all(mean) %>%
+    column_to_rownames("Treatment") %>%
+    t()  # Transpose back for heatmap
+  
+  return(grouped_data)
+}
+
+# Append "_gutdb" to each value in the "Sample" column
+metadata_DSS13_gut <- metadata_DSS13_c 
+metadata_DSS13_gut$Sample <- paste0(metadata_DSS13_gut$Sample, "_gutdb")
+
+# Check the updated column
+any(duplicated(metadata_DSS13_gut$Sample))  # Should return FALSE
+sum(is.na(metadata_DSS13_gut$Sample))  # Should return 0
+
+metadata_DSS13_gut$Sample <- ifelse(metadata_DSS13_gut$Sample == "06_DSS13_gutdb", 
+                                    "06_DSS13_downsampled_gutdb", 
+                                    metadata_DSS13_gut$Sample)
+metadata_DSS13_gut$Sample <- ifelse(metadata_DSS13_gut$Sample == "08_DSS13_gutdb", 
+                                    "08_DSS13_downsampled_gutdb", 
+                                    metadata_DSS13_gut$Sample)
+
+
+rownames(metadata_DSS13_gut) <- metadata_DSS13_gut$Sample
+rownames(metadata_DSS13_gut) <- NULL
+
+metadata_DSS13_gut
+# Apply to all datasets
+grouped_B_S_gut <- group_by_treatment(z_B_S_gut, metadata_DSS13_gut)
+grouped_B_G_gut <- group_by_treatment(z_B_G_gut, metadata_DSS13_gut)
+grouped_B_P_gut <- group_by_treatment(z_B_P_gut, metadata_DSS13_gut)
+grouped_B_F_gut <- group_by_treatment(z_B_F_gut, metadata_DSS13_gut)
+
+
+```
+
+#GENERATE HEATMAPS
+
+#THE GENERATION OF THE HEATMAPS BELOW INCORPORATED DIFFERENTIAL EXPRESSION 
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(grid)
+library(ComplexHeatmap)  # Redundant load for safety
+
+generate_heatmap <- function(data, title, output_prefix, de_results) {
+  dir.create(dirname(output_prefix), showWarnings = FALSE, recursive = TRUE)
+
+  # Filter DE results and extract coefficients for ordering
+  dss_coef <- de_results %>%
+    filter(feature %in% rownames(data)) %>%
+    filter(pval < 0.05) %>%
+    select(feature, coef) %>%
+    arrange(desc(coef))
+
+  ordered_data <- data[dss_coef$feature, , drop = FALSE]
+  species_annotation <- ifelse(dss_coef$coef > 0, "Upregulated", "Downregulated")
+  species_colors <- c("Upregulated" = "#E41A1C", "Downregulated" = "#377EB8")
+
+  # Row annotation (Regulation)
+  row_annot <- rowAnnotation(
+    Regulation = factor(species_annotation, levels = c("Upregulated", "Downregulated")),
+    col = list(Regulation = species_colors),
+    annotation_legend_param = list(
+      Regulation = list(
+        title_gp = gpar(fontsize = 18, fontface = "bold"),
+        labels_gp = gpar(fontsize = 14, fontface = "bold")
+      )
+    )
+  )
+
+  # Column annotation (Group)
+  ann_colors <- c(
+    "Control" = "#0000ff",
+    "DSS" = "#f96595",
+    "ZnO+DSS" = "#07be78",
+    "DSS+ZnO" = "#057e97",
+    "DSS+ZnI" = "#8babd2"
+  )
+
+  column_annot <- HeatmapAnnotation(
+    Group = factor(colnames(ordered_data), levels = names(ann_colors)),
+    col = list(Group = ann_colors),
+    annotation_legend_param = list(
+      Group = list(
+        title_gp = gpar(fontsize = 16, fontface = "bold"),
+        labels_gp = gpar(fontsize = 14, fontface = "bold"),
+        nrow = 5
+      )
+    )
+  )
+
+  # Heatmap
+  heatmap <- Heatmap(
+    as.matrix(ordered_data),
+    name = "Z-score",
+    col = colorRamp2(c(min(ordered_data, na.rm = TRUE), 0, max(ordered_data, na.rm = TRUE)),
+                     c("#000033", "white", "#FF3300")),
+    cluster_rows = FALSE,
+    cluster_columns = FALSE,
+    show_row_names = TRUE,
+    show_column_names = TRUE,
+    column_names_gp = gpar(fontsize = 16, fontface = "bold"),
+    row_names_gp = gpar(fontsize = 14, fontface = "bold"),
+    top_annotation = column_annot,
+    left_annotation = row_annot,
+    column_title = title,
+    column_title_gp = gpar(fontsize = 16, fontface = "bold"),
+    heatmap_legend_param = list(
+      title_gp = gpar(fontsize = 16, fontface = "bold"),
+      labels_gp = gpar(fontsize = 14, fontface = "bold")
+    )
+  )
+
+  # Dynamic height scaling
+  row_height_factor <- 30
+  plot_height <- max(600, nrow(ordered_data) * row_height_factor)
+
+  # Export heatmap only (no legends)
+  png(paste0(output_prefix, "_heatmap.png"), width = 1200, height = plot_height, res = 150)
+  draw(heatmap, show_heatmap_legend = FALSE, show_annotation_legend = FALSE, padding = unit(c(10, 10, 10, 50), "mm"))
+  
+
+  dev.off()
+
+  # Extract and combine legends
+  heatmap_lgd <- Legend(title = "Z-score",
+                        col_fun = colorRamp2(c(min(ordered_data, na.rm = TRUE), 0, max(ordered_data, na.rm = TRUE)),
+                                             c("#000033", "white", "#FF3300")),
+                        title_gp = gpar(fontsize = 16, fontface = "bold"),
+                        labels_gp = gpar(fontsize = 14, fontface = "bold"))
+
+  regulation_lgd <- Legend(title = "Regulation",
+                           at = c("Upregulated", "Downregulated"),
+                           legend_gp = gpar(fill = c("#E41A1C", "#377EB8")),
+                           title_gp = gpar(fontsize = 18, fontface = "bold"),
+                           labels_gp = gpar(fontsize = 14, fontface = "bold"))
+
+  group_lgd <- Legend(title = "Group",
+                      at = names(ann_colors),
+                      legend_gp = gpar(fill = ann_colors),
+                      title_gp = gpar(fontsize = 16, fontface = "bold"),
+                      labels_gp = gpar(fontsize = 14, fontface = "bold"))
+
+  combined_lgd <- packLegend(heatmap_lgd, regulation_lgd, group_lgd, direction = "vertical")
+
+  # Export combined legend
+  png(paste0(output_prefix, "_legend.png"), width = 800, height = 1200, res = 150)
+  grid.newpage()
+  draw(combined_lgd)
+  dev.off()
+}
+
+generate_heatmap(grouped_B_S_gut, "Bacteria Species", 
+                 "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/MGBC_Database/figures/Heatmap/Bacteria_Species_DE.png", de_res_S_gut)
+
+generate_heatmap(grouped_B_G_gut, "Bacteria Genus", 
+                 "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/MGBC_Database/figures/Heatmap/Bacteria_Genus_DE.png", de_res_G_gut)
+
+generate_heatmap(grouped_B_P_gut, "Bacteria Phylum", 
+                 "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/MGBC_Database/figures/Heatmap/Bacteria_Phylum_DE.png", de_res_P_gut)
+
+generate_heatmap(grouped_B_F_gut, "Bacteria Family", 
+                 "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/MGBC_Database/figures/Heatmap/Bacteria_Family_DE.png", de_res_F_gut)
+```
+
+
+#MAKE STACKED BAR CHARTS AT THE SPECIES LEVEL FOR BACTERIA/FUNGI/VIRUSES. THIS PLOT USES RELATIVE ABUNDANCE 
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tibble)
+
+# 🔹 Function to generate stacked bar charts for the top 30 taxa
+generate_stacked_bar_chart <- function(data, metadata, title, output_prefix) {
+  
+  # Ensure rownames (taxa names) are preserved as a column
+  data$Taxa <- rownames(data)
+  
+  # Convert to long format
+  long_data <- data %>%
+    pivot_longer(cols = -Taxa, names_to = "Sample", values_to = "Abundance") %>%
+    left_join(metadata, by = "Sample")
+
+  # Normalize relative abundance within each sample
+  long_data <- long_data %>%
+    group_by(Sample) %>%
+    mutate(Relative_Abundance = Abundance / sum(Abundance))
+
+  # Find top 30 taxa
+  top_30_taxa <- long_data %>%
+    group_by(Taxa) %>%
+    summarise(Total_Abundance = sum(Relative_Abundance, na.rm = TRUE)) %>%
+    arrange(desc(Total_Abundance)) %>%
+    slice_head(n = 30) %>%
+    pull(Taxa)
+
+  # Filter and summarize
+  filtered_data <- long_data %>%
+    filter(Taxa %in% top_30_taxa)
+
+  summarized_data <- filtered_data %>%
+    group_by(Treatment, Taxa) %>%
+    summarise(Mean_Abundance = mean(Relative_Abundance, na.rm = TRUE), .groups = "drop")
+
+  summarized_data$Treatment <- factor(summarized_data$Treatment, 
+                                      levels = c("Control", "DSS", "ZnO+DSS", "DSS+ZnO", "DSS+ZnI"))
+
+  # Define color palette
+  color_palette <- colorRampPalette(c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7"))(30)
+
+  # Generate the plot
+  plot_with_legend <- ggplot(summarized_data, aes(x = Treatment, y = Mean_Abundance, fill = Taxa)) +
+    geom_bar(stat = "identity", position = "fill", color = "black", width = 0.4) +
+    scale_fill_manual(values = color_palette) +
+    theme_minimal() +
+    labs(
+      title = title,
+      x = "Treatment Group",
+      y = "Relative Abundance",
+      fill = "Taxa"
+    ) +
+    theme(
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5),  # Bigger + centered
+      legend.position = "right",
+      axis.title.x = element_text(size = 14, face = "bold"),
+      axis.title.y = element_text(size = 14, face = "bold"),
+      axis.text.x = element_text(size = 12, face = "bold", angle = 45, hjust = 1),
+      axis.text.y = element_text(size = 12),
+      legend.title = element_text(size = 14, face = "bold"),  # 🔹 Bold legend title
+      legend.text = element_text(size = 12, face = "bold")  
+    )
+
+  # Extract legend
+  legend_only <- get_legend(plot_with_legend)
+
+  # Save plot without legend
+  plot_no_legend <- plot_with_legend + theme(legend.position = "none")
+  ggsave(paste0(output_prefix, "_barplot.png"), plot = plot_no_legend, width = 3.5, height = 6, dpi = 300)
+
+  # Save legend as separate PNG
+  png(paste0(output_prefix, "_legend.png"), width = 1500, height = 1000, res = 150)
+  grid::grid.newpage()
+  grid::grid.draw(legend_only)
+  dev.off()
+
+  return(list(plot = plot_no_legend, legend = legend_only))
+}
+
+
+
+# 🔹 Define datasets and file paths
+datasets <- list(
+  "Bacteria Species" = combined_bacteria_gut,
+  "Bacteria Genera" = combined_G_gut,
+  "Bacteria Phyla" = combined_P_gut,
+  "Bacteria Families" = combined_F_gut
+)
+
+# Define directory for saving plots
+output_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/MGBC_Database/figures/StackedBarCharts/"
+
+# 🔹 Generate and save stacked bar charts for each dataset
+plots <- list()
+for (name in names(datasets)) {
+  output_path <- paste0(output_dir, "stacked_bar_", name, ".png")
+  plots[[name]] <- generate_stacked_bar_chart(datasets[[name]], metadata_DSS13_gut, 
+                                              paste("Stacked Bar Chart of\n", name), output_path)
+}
+
+# Display plots
+plots
+
+combined_bacteria_gut
+combined_
+
+combined_bacteria_gut
+combined_G_gut 
+combined_P_gut 
+combined_F_gut 
+```
+
+
+
+
+
+
+```{r fig.width= 12, fig.heeight = 15}
+library(pheatmap)
+library(dplyr)
+library(tibble)
+library(ComplexHeatmap)
+library(circlize)
+
+# Step 1: Calculate the top 30 genera based on their overall abundance
+top_species_gut <- bracken_rarefied_gut %>%
+  rowSums() %>%                  # Sum across samples for each genus
+  sort(decreasing = TRUE) %>%    # Sort by abundance
+  head(30) %>%                   # Select top 30 genera
+  names()                        # Get genus names
+
+# Filter the Bracken data for the top 30 genera
+bracken_top30_gut <- bracken_rarefied_gut[top_species_gut, ]
+
+# Step 2: Normalize relative abundance across each sample
+bracken_top30_gut <- t(apply(bracken_top30_gut, 1, function(x) x / sum(x)))
+
+top_species_gut
+# Step 3: Create an annotation dataframe from metadata
+# Assume `metadata` has columns: 'Sample' and 'Group'
+
+annotation <- metadata_DSS13_gut %>%
+  column_to_rownames("Sample")  # Ensure sample names are rownames
+
+
+# Step 4: Define annotation colors (optional)
+ann_colors <- list(Group = c(
+  "Control" = "#0000ff",
+  "DSS" = "#f96595",
+  "ZnO+DSS" = "#07be78",
+  "DSS+ZnO" = "#057e97",
+  "DSS+ZnI" = "#8babd2"
+))
+
+column_annot <- HeatmapAnnotation(
+  Group = annotation$Treatment,  # Group column from metadata
+  col = ann_colors           # Map colors to groups
+)
+
+
+desired_order_c <- c(
+"12_DSS13", "13_DSS13", "14_DSS13", "30_DSS13", "31_DSS13",
+  "33_DSS13", "34_DSS13", "01_DSS13", "02_DSS13", "04_DSS13",
+  "09_DSS13", "10_DSS13", "11_DSS13", "27_DSS13", "28_DSS13", "29_DSS13",
+  "44_DSS13", "45_DSS13", "46_DSS13", "47_DSS13", "05_DSS13",
+  "06_DSS13", "07_DSS13", "08_DSS13", "16_DSS13", "17_DSS13",
+  "18_DSS13", "19_DSS13", "23_DSS13", "24_DSS13", "25_DSS13", "26_DSS13", 
+  "35_DSS13", "36_DSS13", "40_DSS13", "41_DSS13", "20_DSS13", 
+  "21_DSS13", "22_DSS13", "38_DSS13", "39_DSS13", "43_DSS13")
+
+custom_legend <- Legend(
+  at = c("Control", "DSS", "ZnO+DSS", "DSS+ZnO", "DSS+ZnI"),
+  labels = c("Control", "DSS", "ZnO+DSS", "DSS+ZnO", "DSS+ZnI"),
+  legend_gp = gpar(fill = c("#0000ff", "#f96595", "#07be78", "#057e97", "#8babd2")),
+  title = "Group"
+)
+
+species_heatmap_c_gut <- Heatmap(
+  bracken_top30_gut,
+  name = "Relative Abundance",
+  col = colorRamp2(c(0, max(bracken_top30_gut, na.rm = TRUE)), c("#000033", "#FF3300")),
+  row_names_side = "left",
+  cluster_rows = TRUE,  # Cluster species
+  column_order = desired_order_c,  # Maintain desired order
+  show_row_names = TRUE,
+  show_column_names = TRUE,
+  column_names_gp = gpar(fontsize = 8),
+  row_names_gp = gpar(fontsize = 10),
+  top_annotation = column_annot,
+  heatmap_legend_param = list(title = "Relative Abundance"), 
+  column_title = "Heatmap of Top 30 Species - Relative Abundance"
+)
+
+
+png("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/Heatmap/species_heatmap_c_gutdb.png", width = 1800, height = 1200, res = 150)
+draw(species_heatmap_c_gut, annotation_legend_list = list(custom_legend))
+dev.off()
+```
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(dplyr)
+
+# Match metadata to bracken_top30_gut samples
+metadata_filtered <- metadata_DSS13_gut %>% filter(Sample %in% colnames(bracken_top30_gut))
+
+# Ensure order of metadata matches column order in bracken_top30_gut
+metadata_filtered <- metadata_filtered[match(colnames(bracken_top30_gut), metadata_filtered$Sample), ]
+
+# Aggregate by treatment group (average relative abundance within each group)
+bracken_avg_gut <- bracken_top30_gut %>%
+  as.data.frame() %>%
+  t() %>%
+  as.data.frame() %>%
+  mutate(Treatment = metadata_filtered$Treatment) %>%
+  group_by(Treatment) %>%
+  summarise_all(mean) %>%
+  column_to_rownames("Treatment") %>%
+  t()  # Transpose back for heatmap input
+
+# Define annotation colors
+ann_colors <- c(
+  "Control" = "#0000ff",
+  "DSS" = "#f96595",
+  "ZnO+DSS" = "#07be78",
+  "DSS+ZnO" = "#057e97",
+  "DSS+ZnI" = "#8babd2"
+)
+
+# 🔹 **Ensure `bracken_avg_gut` column order matches the color order**
+bracken_avg_gut <- bracken_avg_gut[, c("Control", "DSS", "ZnO+DSS", "DSS+ZnO", "DSS+ZnI")]
+
+# 🔹 **Fix: Create the annotation using the same ordered column names**
+column_annot_avg <- HeatmapAnnotation(
+  Group = factor(colnames(bracken_avg_gut), 
+                 levels = c("Control", "DSS", "ZnO+DSS", "DSS+ZnO", "DSS+ZnI")), 
+  col = list(Group = ann_colors)
+)
+
+# Generate the heatmap
+species_heatmap_avg_gut <- Heatmap(
+  bracken_avg_gut,
+  name = "Relative Abundance",
+  col = colorRamp2(c(0, max(bracken_avg_gut, na.rm = TRUE)), c("#000033", "#FF3300")),
+  row_names_side = "left",
+  cluster_rows = TRUE,  # Cluster species
+  cluster_columns = FALSE,  # Keep fixed order
+  show_row_names = TRUE,
+  show_column_names = TRUE,
+  column_names_gp = gpar(fontsize = 12),  # Larger font for treatment labels
+  row_names_gp = gpar(fontsize = 10),
+  top_annotation = column_annot_avg,
+  heatmap_legend_param = list(title = "Relative Abundance"),
+  column_title = "Heatmap of Top 30 Species - Averaged by Treatment Group"
+)
+
+# Print the heatmap
+species_heatmap_avg_gut
+
+# Save the heatmap
+png("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/Heatmap/species_heatmap_avg_gutdb.png", width = 1200, height = 1200, res = 150)
+draw(species_heatmap_avg_gut)
+dev.off()
+
+```
+
+
+```{r}
+#the below metadata has samples 03, 42, 48, 32, 15, and 37 removed 
+unclassified <- read.table("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/Unclassified_Reads_DSS13_c.csv", header = TRUE, sep = ",", stringsAsFactors = FALSE)
+unclassified
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(ggpubr)  # For statistical comparisons
+
+unclassified_reads <- ggplot(unclassified, aes(x = Treatment, y = Percent_Unclassified, fill = Treatment)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +  # Boxplot without outliers
+  geom_jitter(width = 0.2, alpha = 0.8, size = 2) +  # Add jittered points for visualization
+  theme_minimal() +
+  labs(title = "Unclassified Reads Across Treatment Groups",
+       x = "Treatment Group",
+       y = "Percentage of Unclassified Reads") +
+  theme(legend.position = "none") +  # Remove legend since x-axis already shows treatment
+  scale_fill_manual(values = c("Control" = "#0000ff", "DSS" = "#f96595", 
+                                "ZnO+DSS" = "#07be78", "DSS+ZnO" = "#057e97", 
+                                "DSS+ZnI" = "#8babd2")) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.text.x = element_text(size = 16, angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 25),  # Bigger y-axis text
+    axis.title.x = element_text(size = 18, face = "bold"),  # Bigger x-axis label
+    axis.title.y = element_text(size = 18, face = "bold"),  # Bigger y-axis label
+    legend.position = "none"
+  )# Custom colors if needed
+
+
+unclassified_reads
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/unclassified_reads_boxplot.jpeg", 
+       plot = unclassified_reads, width = 8, height = 6, dpi = 300)
+
+
+```
+
+```{r}
+library(ggplot2)
+
+read_dist_gut <- ggplot(data = data.frame(Sample = names(sample_reads_gut), Reads = sample_reads_gut), aes(x = Sample, y = Reads)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  theme_minimal() +
+  labs(
+    title = "Total Reads per Sample",
+    x = "Samples",
+    y = "Total Reads"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 8),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold")
+  )
+
+read_dist_gut
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/read_dist_gutdb.jpeg", plot = read_dist, width = 8, height = 8, dpi = 300)
+
+```
+
+#COMBINE BRACKEN DATA FOR GENUS
+
+```{r}
+
+#If your primary focus is at the species level, and you aggregate relative abundances at higher levels (e.g., genus or family), then separate rarefaction at higher levels is not necessary.
+#If you use relative abundance transformations (e.g., percent normalization, CLR transformation in compositional analysis) instead of raw counts, rarefaction at the species level should suffice.
+
+
+library(data.table)
+library(dplyr)
+# List of Bracken files
+file_list <- list.files(path = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/bracken_output_G_gutdb/", pattern = "_bracken_output.txt", full.names = TRUE)
+
+# Read each file and process
+bracken_data_G_c_gut <- lapply(file_list, function(file) {
+  # Extract sample name from the file name
+  sample_name <- gsub("_bracken_output.txt", "", basename(file))
+  
+  # Read the file and keep necessary columns
+  data <- read.table(file, header = TRUE, sep = "\t") %>%
+    select(name, new_est_reads) %>%
+    rename_with(~ sample_name, .cols = new_est_reads)  # Dynamically rename column
+  
+  return(data)
+})
+
+# Merge all data by the "Taxon" column
+combined_data_G_c_gut <- Reduce(function(x, y) merge(x, y, by = "name", all = TRUE), bracken_data_G_c_gut)
+
+# Replace NA with 0 (if there are missing taxa in some samples)
+combined_data_G_c_gut[is.na(combined_data_G_c_gut)] <- 0
+
+rownames(combined_data_G_c_gut) <- combined_data_G_c_gut$name
+combined_data_G_c_gut <- combined_data_G_c_gut[, -1]
+
+write.csv(combined_data_G_c_gut, "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/combined_data_bracken_G_c_gutdb.csv", row.names = TRUE)
+combined_data_bracken_G_c_gut <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/combined_data_bracken_G_c_gutdb.csv", row.names = 1)
+colnames(combined_data_bracken_G_c_gut) <- gsub("^X", "", colnames(combined_data_bracken_G_c_gut))
+colnames(combined_data_bracken_G_c_gut) <- gsub("_report\\.txt$", "", colnames(combined_data_bracken_G_c_gut))
+colnames(combined_data_bracken_G_c_gut) <- gsub("_gutdb$", "", colnames(combined_data_bracken_G_c_gut))
+colnames(combined_data_bracken_G_c_gut) <- gsub("_downsampled$", "", colnames(combined_data_bracken_G_c_gut))
+combined_data_bracken_G_c_gut
+```
+
+```{r fig.width= 12, fig.heeight = 15}
+library(pheatmap)
+library(dplyr)
+library(tibble)
+library(ComplexHeatmap)
+
+combined_data_bracken_G_c_gut
+
+#desired order of samples that allows them to be grouped on the heatmap by treatment group
+
+# Step 1: Calculate the top 30 genera based on their overall abundance
+top_genera_gut <- combined_data_bracken_G_c_gut %>%
+  rowSums() %>%                  # Sum across samples for each genus
+  sort(decreasing = TRUE) %>%    # Sort by abundance
+  head(30) %>%                   # Select top 30 genera
+  names()                        # Get genus names
+
+# Filter the Bracken data for the top 30 genera
+bracken_top30_G_c_gut <- combined_data_bracken_G_c_gut[top_genera, ]
+
+# Step 2: Normalize relative abundance across each sample
+bracken_top30_G_c_gut <- t(apply(bracken_top30_G_c_gut, 1, function(x) x / sum(x)))
+
+
+
+
+custom_legend <- Legend(
+  at = c("Control", "DSS", "ZnO+DSS", "DSS+ZnO", "DSS+ZnI"),
+  labels = c("Control", "DSS", "ZnO+DSS", "DSS+ZnO", "DSS+ZnI"),
+  legend_gp = gpar(fill = c("#0000ff", "#f96595", "#07be78", "#057e97", "#8babd2")),
+  title = "Group"
+)
+
+
+genus_heatmap_c_gut <- Heatmap(
+  bracken_top30_G_c_gut,
+  name = "Relative Abundance",
+  col = colorRamp2(c(0, max(bracken_top30_gut, na.rm = TRUE)), c("#000033", "#FF3300")),
+  top_annotation = column_annot,
+  cluster_rows = TRUE, 
+  row_names_side = "left",
+  column_names_gp = gpar(fontsize = 8),
+  row_names_gp = gpar(fontsize = 10),
+  show_row_names = TRUE,
+  show_column_names = TRUE,
+  #cluster_rows = TRUE,
+  column_order = desired_order_c,
+  column_title = "Heatmap of Top 30 Genera - Relative Abundance",
+  heatmap_legend_param = list(title = "Relative Abundance")
+)
+
+genus_heatmap_c_gut
+
+png("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/Heatmap/genus_heatmap_c_gutdb.png", width = 1200, height = 1200, res = 150)
+draw(genus_heatmap_c_gut, annotation_legend_list = list(custom_legend))
+dev.off()
+
+
+
+```
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(dplyr)
+
+# Match metadata to bracken_top30_gut samples
+metadata_filtered <- metadata_DSS13_gut %>% filter(Sample %in% colnames(bracken_top30_gut))
+
+# Ensure order of metadata matches column order in bracken_top30_gut
+metadata_filtered <- metadata_filtered[match(colnames(bracken_top30_gut), metadata_filtered$Sample), ]
+
+# Aggregate by treatment group (average relative abundance within each group)
+bracken_avg_gut_genus <- bracken_top30_G_c_gut %>%
+  as.data.frame() %>%
+  t() %>%
+  as.data.frame() %>%
+  mutate(Treatment = metadata_filtered$Treatment) %>%
+  group_by(Treatment) %>%
+  summarise_all(mean) %>%
+  column_to_rownames("Treatment") %>%
+  t()  # Transpose back for heatmap input
+
+# Generate the new heatmap with 5 columns (aggregated by treatment group)
+genus_heatmap_avg_gut <- Heatmap(
+  bracken_avg_gut_genus,
+  name = "Relative Abundance",
+  col = colorRamp2(c(0, max(bracken_avg_gut, na.rm = TRUE)), c("#000033", "#FF3300")),
+  row_names_side = "left",
+  cluster_rows = TRUE,  # Cluster species
+  cluster_columns = FALSE,  # Keep fixed order
+  show_row_names = TRUE,
+  show_column_names = TRUE,
+  column_names_gp = gpar(fontsize = 12),  # Larger font for treatment labels
+  row_names_gp = gpar(fontsize = 10),
+  top_annotation = column_annot_avg,
+  heatmap_legend_param = list(title = "Relative Abundance"),
+  column_title = "Heatmap of Top 30 Genera - Averaged by Treatment Group"
+)
+
+species_heatmap_avg_gut
+# Save the averaged heatmap
+png("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/Heatmap/genus_heatmap_avg_gutdb.png", width = 1200, height = 1200, res = 150)
+draw(genus_heatmap_avg_gut)
+dev.off()  # Cluster species
+
+```
+#COMPARING GENERA THAT OVERLAP IN HUMAN IBD V DSS MICE & HEALTHY HUMANS V CONTROL MICE 
+
+```{r fig.width=10}
+library(ggvenn)
+
+DSS_samples <- c("01_DSS13", "02_DSS13", "04_DSS13", "09_DSS13", 
+                      "10_DSS13", "11_DSS13", "27_DSS13", "28_DSS13", 
+                      "29_DSS13", "44_DSS13", "45_DSS13", "46_DSS13", "47_DSS13")
+
+# Subset the dataframe for the selected samples
+DSS_data_gut <- combined_data_bracken_G_c_gut[, DSS_samples]
+
+# Calculate total abundance for each genus across the selected samples
+genus_totals_gut <- rowSums(DSS_data_gut)
+
+# Sort genera by total abundance in descending order
+sorted_genera_gut <- sort(genus_totals_gut, decreasing = TRUE)
+
+# Select the top 50 genera
+top_50_genera_DSS_gut <- head(sorted_genera_gut, 50)
+
+# Extract the rows corresponding to the top 50 genera
+top_50_genera_names_gut <- names(top_50_genera_DSS_gut)
+top_50_genera_names_gut
+
+top_genera_m_gut <- top_50_genera_names_gut
+top_genera_h_ibd <- c(
+  "g__Bacteroides", "g__Faecalibacterium", "g__Eubacterium", "g__Alistipes", "g__Roseburia",
+  "g__Parabacteroides", "g__Subdoligranulum", "g__Escherichia", "g__Clostridium", "g__Prevotella",
+  "g__Veillonella", "g__Blautia", "g__Oscillibacter", "g__Acidaminococcus", "g__Dialister",
+  "g__Akkermansia", "g__Coprococcus", "g__Bifidobacterium", "g__Lachnospiraceae_noname",
+  "g__Ruminococcus", "g__Paraprevotella", "g__Barnesiella", "g__Klebsiella", "g__Odoribacter", "g__Dorea"
+)
+top_50_gutdb_mice <- c(
+  "g__Akkermansia", "g__Prevotella", "g__Duncaniella", "g__Lachnospiraceae", "g__Oscillibacter",
+  "g__Lachnospiraceae", "g__Phocaeicola", "g__Muribaculum", "g__Unclassified_Porphyromonadaceae",
+  "g__Prevotella", "g__Prevotella", "g__Alistipes", "g__UBA11940", "g__UMGS268", "g__Bacteroides",
+  "g__Lachnospiraceae_noname", "g__UBA9475", "g__Rikenellaceae", "g__Acetatifactor", "g__Lachnospiraceae",
+  "g__Odoribacter", "g__Oscillospiraceae_NOV", "g__Helicobacter_C", "g__Parabacteroides", "g__Lawsonibacter",
+  "g__Paramuribaculum", "g__Kineothrix", "g__Christensenella", "g__Ligilactobacillus", "g__Eubacterium_F",
+  "g__Christensenella", "g__Eubacterium", "g__UBA7182", "g__Mucispirillum", "g__1XD8-76", "g__Bilophila",
+  "g__Lactobacillus", "g__Borkfalkiaceae_NOV", "g__UMGS1370", "g__Gastranaerophilales_NOV", "g__Butyribacter",
+  "g__Muribaculaceae_NOV", "g__Butyricicoccaceae_NOV", "g__Enterocloster", "g__Turicimonas", "g__Dorea",
+  "g__UMGS1004", "g__Eubacterium_J", "g__Eubacterium", "g__Lactococcus"
+)
+
+# Create the data list
+data_list <- list(
+  "Top 50 Genera in DSS Mice" = top_50_gutdb_mice,
+  "Top 25 Genera in IBD Humans" = top_genera_h_ibd
+)
+
+# Generate the Venn diagram
+library(ggvenn)
+human_mice_genera_overlap_venn <- ggvenn(data_list, 
+       names(data_list),
+       fill_color = c("#f96595", "#C1AE43"),
+       fill_alpha = 0.5,
+       stroke_size = 0.5,
+       text_size = 5,
+       set_name_size = 6) +
+  ggtitle("Overlapping Genera Between UC Mice and IBD Humans") + theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5)  # Make title larger and centered
+  )
+
+human_mice_genera_overlap_venn
+
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/VennDiagram/human_mice_genera_overlap_venn.png",
+       plot = human_mice_genera_overlap_venn, width = 8, height = 6, dpi = 300)
+```
+
+```{r}
+Control_samples <- c("12_DSS13", "13_DSS13", "14_DSS13", "30_DSS13", 
+             "31_DSS13", "33_DSS13", "34_DSS13")
+
+# Subset the dataframe for the selected samples
+Control_data_gut <- combined_data_bracken_G_c_gut[, Control_samples]
+
+# Calculate total abundance for each genus across the selected samples
+genus_totals_gut_control <- rowSums(Control_data_gut)
+
+# Sort genera by total abundance in descending order
+sorted_genera_gut_control <- sort(genus_totals_gut_control, decreasing = TRUE)
+
+# Select the top 50 genera
+top_50_genera_control_gut <- head(sorted_genera_gut_control, 50)
+
+# Extract the rows corresponding to the top 50 genera
+top_50_genera_names_gut_control <- names(top_50_genera_control_gut)
+top_50_genera_names_gut_control
+
+top_50_healthy_mice  <- c(
+  "g__CAG-485", "g__Duncaniella", "g__Akkermansia", "g__Muribaculum", "g__COE1",
+  "g__CAG-873", "g__Prevotella", "g__Oscillibacter", "g__UBA7173", "g__Alistipes",
+  "g__Paramuribaculum", "g__UMGS1370", "g__Bacteroides", "g__UBA9475", "g__Lawsonibacter",
+  "g__Parabacteroides", "g__Lachnospiraceae_noname", "g__UBA11940", "g__UBA3263", "g__UBA7182",
+  "g__CAG-95", "g__Prevotellamassilia", "g__Acetatifactor", "g__UBA3282", "g__1XD8-76",
+  "g__Bilophila", "g__Butyricicoccaceae_NOV", "g__Borkfalkiaceae_NOV", "g__UMGS268",
+  "g__Oscillospiraceae_NOV", "g__Hungatella_A", "g__Muribaculaceae_NOV", "g__RC9",
+  "g__UBA9502", "g__Phocaeicola", "g__CAG-552_NOV", "g__Odoribacter", "g__Kineothrix",
+  "g__Parasutterella", "g__Flavonifractor", "g__Ligilactobacillus", "g__Dorea", "g__14-2",
+  "g__Eubacterium_F", "g__UBA3700_NOV", "g__Helicobacter_C", "g__TF01-11", "g__UMGS1004",
+  "g__Schaedlerella", "g__Lactobacillus"
+)
+
+top_genera_m_gut <- top_50_genera_names_gut
+top_genera_h_healthy <- c(
+  "g__Bacteroides", "g__Eubacterium", "g__Faecalibacterium", "g__Bifidobacterium",
+  "g__Subdoligranulum", "g__Ruminococcus", "g__Alistipes", "g__Escherichia",
+  "g__Blautia", "g__Roseburia", "g__Prevotella", "g__Coprococcus", "g__Collinsella",
+  "g__Akkermansia", "g__Parabacteroides", "g__Dorea", "g__Streptococcus",
+  "g__Dialister", "g__Butyrivibrio", "g__Lachnospiraceae_noname", "g__Megamonas",
+  "g__Barnesiella", "g__Clostridium", "g__Phascolarctobacterium", "g__Erysipelotrichaceae_noname"
+)
+
+data_list <- list(
+  "Top 50 Genera in Healthy Mice" = top_50_healthy_mice,
+  "Top 25 Genera in Healthy Humans" = top_genera_h_healthy
+)
+
+# Generate the Venn diagram
+library(ggvenn)
+human_mice_genera_overlap_venn_healthy <- ggvenn(data_list, 
+       names(data_list),
+       fill_color = c("#0000ff", "red"),
+       fill_alpha = 0.5,
+       stroke_size = 0.5,
+       text_size = 5,
+       set_name_size = 6) +
+  ggtitle("Overlapping Genera Between Control Mice and Healthy Humans") + theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5)  # Make title larger and centered
+  )
+
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/VennDiagram/human_mice_genera_overlap_venn_healthy.png",
+       plot = human_mice_genera_overlap_venn_healthy, width = 10, height = 6, dpi = 300)
+```
+
+#OBSERVE TRENDS BETWEEN COMMONLY UPREGULATED GENES BETWEEN MICE AND HUMANS
+
+```{r}
+#Odoribacter, Clostridium, Alistipes, Roseburia were the only genera share as both downregulated in human IBD and UC Mice
+
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(ggpubr)
+
+# Define the genera of interest
+genera_of_interest <- c("Odoribacter", "Clostridium", "Alistipes_A", "Roseburia")
+
+combined_data_bracken_G_c_gut
+
+# Transpose dataframe: make genera columns and samples rows
+combined_data_bracken_G_c_gut_t <- as.data.frame(t(combined_data_bracken_G_c_gut))
+combined_data_bracken_G_c_gut_t$Sample <- rownames(combined_data_bracken_G_c_gut_t)
+
+# Convert to long format
+df_long <- combined_data_bracken_G_c_gut_t %>%
+  pivot_longer(cols = all_of(genera_of_interest), names_to = "Genus", values_to = "Abundance") %>%
+  left_join(metadata_DSS13_gut, by = "Sample")  # Merge with metadata for treatment groups
+
+# Perform Kruskal-Wallis test for each genus and filter significant ones (p < 0.05)
+sig_genera <- df_long %>%
+  group_by(Genus) %>%
+  summarise(p_value = kruskal.test(Abundance ~ Treatment, data = cur_data())$p.value) %>%
+  filter(p_value < 0.05) %>%
+  pull(Genus)
+
+# Filter the main dataframe to keep only significant genera
+df_significant <- df_long %>%
+  filter(Genus %in% sig_genera)
+
+# Define colors for treatments
+ann_colors <- c(
+  "Control" = "#0000ff",
+  "DSS" = "#f96595",
+  "ZnO+DSS" = "#07be78",
+  "DSS+ZnO" = "#057e97",
+  "DSS+ZnI" = "#8babd2"
+)
+
+# Generate boxplots with significance annotations
+boxplot_fig <- ggplot(df_significant, aes(x = Treatment, y = Abundance, fill = Treatment)) +
+  geom_boxplot(alpha = 0.7) +
+  geom_jitter(position = position_jitter(0.2), alpha = 0.5) +
+  scale_fill_manual(values = ann_colors) +
+  facet_wrap(~ Genus, scales = "free_y") +  # Separate plots for each genus
+  theme_minimal() +
+  labs(x = "Treatment Group", y = "Relative Abundance", title = "Significantly Different Genera") +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", size = 14)
+  ) 
+  #stat_compare_means(method = "wilcox.test")  # Add Wilcoxon test p-values
+
+# Save the plot
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/Significant_Genera_Boxplots.jpeg",
+       plot = boxplot_fig, width = 12, height = 8, dpi = 300)
+
+boxplot_fig
+
+```
+
+
+#OBSERVE TRENDS BETWEEN COMMONLY DOWNREGULATED GENES BETWEEN MICE AND HUMANS 
+
+```{r}
+#Streptococcus was the only genera share as both downregulated in human IBD and UC Mice
+
+```
+
+
+
+
+#COMBINE BRACKEN DATA FOR PHYLUM
+
+```{r}
+library(data.table)
+library(dplyr)
+# List of Bracken files
+file_list <- list.files(path = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/bracken_output_P_gutdb/", pattern = "_bracken_output.txt", full.names = TRUE)
+
+# Read each file and process
+bracken_data_P_c_gut <- lapply(file_list, function(file) {
+  # Extract sample name from the file name
+  sample_name <- gsub("_bracken_output.txt", "", basename(file))
+  
+  # Read the file and keep necessary columns
+  data <- read.table(file, header = TRUE, sep = "\t") %>%
+    select(name, new_est_reads) %>%
+    rename_with(~ sample_name, .cols = new_est_reads)  # Dynamically rename column
+  
+  return(data)
+})
+
+# Merge all data by the "Taxon" column
+combined_data_P_c_gut <- Reduce(function(x, y) merge(x, y, by = "name", all = TRUE), bracken_data_P_c_gut)
+
+# Replace NA with 0 (if there are missing taxa in some samples)
+combined_data_P_c_gut[is.na(combined_data_P_c_gut)] <- 0
+
+rownames(combined_data_P_c_gut) <- combined_data_P_c_gut$name
+combined_data_P_c_gut <- combined_data_P_c_gut[, -1]
+
+write.csv(combined_data_P_c_gut, "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/combined_data_bracken_P_c_gutdb.csv", row.names = TRUE)
+combined_data_bracken_P_c_gut <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/combined_data_bracken_P_c_gutdb.csv", row.names = 1)
+colnames(combined_data_bracken_P_c_gut) <- gsub("^X", "", colnames(combined_data_bracken_P_c_gut))
+colnames(combined_data_bracken_P_c_gut) <- gsub("_report\\.txt$", "", colnames(combined_data_bracken_P_c_gut))
+colnames(combined_data_bracken_P_c_gut) <- gsub("_gutdb$", "", colnames(combined_data_bracken_P_c_gut))
+colnames(combined_data_bracken_P_c_gut) <- gsub("_downsampled$", "", colnames(combined_data_bracken_P_c_gut))
+
+combined_data_bracken_P_c_gut
+```
+
+```{r}
+library(pheatmap)
+library(dplyr)
+library(tibble)
+library(ComplexHeatmap)
+
+# Step 1: Calculate the top 30 genera based on their overall abundance
+top_phyla <- combined_data_bracken_P_c_gutdb %>%
+  rowSums() %>%                  # Sum across samples for each genus
+  sort(decreasing = TRUE) %>%    # Sort by abundance
+  head(30) %>%                   # Select top 30 genera
+  names()                        # Get genus names
+
+# Filter the Bracken data for the top 30 genera
+bracken_top30_P_gut <- combined_data_bracken_P_c_gutdb[top_phyla, ]
+
+# Step 2: Normalize relative abundance across each sample
+bracken_top30_P_gut <- t(apply(bracken_top30_P_gut, 1, function(x) x / sum(x)))
+
+# Step 3: Create an annotation dataframe from metadata
+# Assume `metadata` has columns: 'Sample' and 'Group'
+
+phylum_heatmap_c_gutdb <- Heatmap(
+  bracken_top30_P_gut,
+  name = "Relative Abundance",
+  top_annotation = column_annot,
+  row_names_side = "left",
+  column_names_gp = gpar(fontsize = 8),
+  row_names_gp = gpar(fontsize = 10),
+  cluster_rows = TRUE,
+  column_order = desired_order_c,
+  column_title = "Heatmap of Top 30 Phyla - Relative Abundance",
+  heatmap_legend_param = list(title = "Relative Abundance"), 
+  col = colorRamp2(c(0, max(bracken_top30_gut, na.rm = TRUE)), c("#000033", "#FF3300")),
+  show_row_names = TRUE,
+  show_column_names = TRUE,
+)
+
+phylum_heatmap_c_gutdb
+
+png("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/Heatmap/phylum_heatmap_c_gutdb.png", width = 1800, height = 1200, res = 150)
+draw(phylum_heatmap_c_gutdb, annotation_legend_list = list(custom_legend))
+dev.off()
+```
+```{r}
+bracken_avg_gut_phyla <- bracken_top30_P_gut %>%
+  as.data.frame() %>%
+  t() %>%
+  as.data.frame() %>%
+  mutate(Treatment = metadata_filtered$Treatment) %>%
+  group_by(Treatment) %>%
+  summarise_all(mean) %>%
+  column_to_rownames("Treatment") %>%
+  t()  # Transpose back for heatmap input
+
+# Generate the new heatmap with 5 columns (aggregated by treatment group)
+phylum_heatmap_avg_gut <- Heatmap(
+  bracken_avg_gut_phyla,
+  name = "Relative Abundance",
+  col = colorRamp2(c(0, max(bracken_avg_gut, na.rm = TRUE)), c("#000033", "#FF3300")),
+  row_names_side = "left",
+  cluster_rows = TRUE,  # Cluster species
+  cluster_columns = FALSE,  # Keep fixed order
+  show_row_names = TRUE,
+  show_column_names = TRUE,
+  column_names_gp = gpar(fontsize = 12),  # Larger font for treatment labels
+  row_names_gp = gpar(fontsize = 10),
+  top_annotation = column_annot_avg,
+  heatmap_legend_param = list(title = "Relative Abundance"),
+  column_title = "Heatmap of Top 14 Phyla - Averaged by Treatment Group"
+)
+
+phylum_heatmap_avg_gut
+# Save the averaged heatmap
+png("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/Heatmap/phylum_heatmap_avg_gutdb.png", width = 1800, height = 1200, res = 150)
+draw(phylum_heatmap_avg_gut)
+dev.off()  # Cluster species
+```
+
+#COMBINE BRACKEN DATA FOR FAMILY
+
+```{r}
+library(data.table)
+library(dplyr)
+# List of Bracken files
+file_list <- list.files(path = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/bracken_output_F_gutdb/", pattern = "_bracken_output.txt", full.names = TRUE)
+
+# Read each file and process
+bracken_data_F_c_gut <-  lapply(file_list, function(file) {
+  # Extract sample name from the file name
+  sample_name <- gsub("_bracken_output.txt", "", basename(file))
+  
+  # Read the file and keep necessary columns
+  data <- read.table(file, header = TRUE, sep = "\t") %>%
+    select(name, new_est_reads) %>%
+    rename_with(~ sample_name, .cols = new_est_reads)  # Dynamically rename column
+  
+  return(data)
+})
+
+# Merge all data by the "Taxon" column
+combined_data_F_c_gut <- Reduce(function(x, y) merge(x, y, by = "name", all = TRUE), bracken_data_F_c_gut)
+
+# Replace NA with 0 (if there are missing taxa in some samples)
+combined_data_F_c_gut[is.na(combined_data_F_c_gut)] <- 0
+
+rownames(combined_data_F_c_gut) <- combined_data_F_c_gut$name
+combined_data_F_c_gut <- combined_data_F_c_gut[, -1]
+
+write.csv(combined_data_F_c_gut, "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/combined_data_bracken_F_c_gutdb.csv", row.names = TRUE)
+combined_data_bracken_F_c_gut <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/combined_data_bracken_F_c_gutdb.csv", row.names = 1)
+colnames(combined_data_bracken_F_c_gut) <- gsub("^X", "", colnames(combined_data_bracken_F_c_gut))
+colnames(combined_data_bracken_F_c_gut) <- gsub("_report\\.txt$", "", colnames(combined_data_bracken_F_c_gut))
+colnames(combined_data_bracken_F_c_gut) <- gsub("_gutdb$", "", colnames(combined_data_bracken_F_c_gut))
+colnames(combined_data_bracken_F_c_gut) <- gsub("_downsampled$", "", colnames(combined_data_bracken_F_c_gut))
+combined_data_bracken_F_c_gut
+```
+
+```{r fig.width= 12, fig.heeight = 15}
+library(pheatmap)
+library(dplyr)
+library(tibble)
+library(ComplexHeatmap)
+
+# Step 1: Calculate the top 30 genera based on their overall abundance
+top_fam <- combined_data_bracken_F_c_gut %>%
+  rowSums() %>%                  # Sum across samples for each genus
+  sort(decreasing = TRUE) %>%    # Sort by abundance
+  head(30) %>%                   # Select top 30 genera
+  names()                        # Get genus names
+
+# Filter the Bracken data for the top 30 genera
+bracken_top30_F_gut <- combined_data_bracken_F_c_gut[top_fam, ]
+
+# Step 2: Normalize relative abundance across each sample
+bracken_top30_F_gut <- t(apply(bracken_top30_F_gut, 1, function(x) x / sum(x)))
+
+# Step 3: Create an annotation dataframe from metadata
+# Assume `metadata` has columns: 'Sample' and 'Group'
+
+
+family_heatmap_c_gut <- Heatmap(
+  bracken_top30_F_gut,
+  name = "Relative Abundance",
+  top_annotation = column_annot,
+  row_names_side = "left",
+  column_names_gp = gpar(fontsize = 8),
+  row_names_gp = gpar(fontsize = 10),
+  cluster_rows = TRUE,
+  column_order = desired_order_c,
+  column_title = "Heatmap of Top 30 Families - Relative Abundance",
+  heatmap_legend_param = list(title = "Relative Abundance"), 
+  col = colorRamp2(c(0, max(bracken_top30_gut, na.rm = TRUE)), c("#000033", "#FF3300")),
+  show_row_names = TRUE,
+  show_column_names = TRUE,
+)
+
+family_heatmap_c_gut
+
+png("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/Heatmap/family_heatmap_c_gutdb.png", width = 1800, height = 1200, res = 150)
+draw(family_heatmap_c_gut, annotation_legend_list = list(custom_legend))
+dev.off()
+```
+```{r}
+bracken_avg_gut_family <- bracken_top30_F_gut %>%
+  as.data.frame() %>%
+  t() %>%
+  as.data.frame() %>%
+  mutate(Treatment = metadata_filtered$Treatment) %>%
+  group_by(Treatment) %>%
+  summarise_all(mean) %>%
+  column_to_rownames("Treatment") %>%
+  t()  # Transpose back for heatmap input
+
+# Generate the new heatmap with 5 columns (aggregated by treatment group)
+family_heatmap_avg_gut <- Heatmap(
+  bracken_avg_gut_family,
+  name = "Relative Abundance",
+  col = colorRamp2(c(0, max(bracken_avg_gut, na.rm = TRUE)), c("#000033", "#FF3300")),
+  row_names_side = "left",
+  cluster_rows = TRUE,  # Cluster species
+  cluster_columns = FALSE,  # Keep fixed order
+  show_row_names = TRUE,
+  show_column_names = TRUE,
+  column_names_gp = gpar(fontsize = 12),  # Larger font for treatment labels
+  row_names_gp = gpar(fontsize = 10),
+  top_annotation = column_annot_avg,
+  heatmap_legend_param = list(title = "Relative Abundance"),
+  column_title = "Heatmap of Top 30 Families - Averaged by Treatment Group"
+)
+
+family_heatmap_avg_gut
+# Save the averaged heatmap
+png("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/Heatmap/family_heatmap_avg_gutdb.png", width = 1800, height = 1200, res = 150)
+draw(family_heatmap_avg_gut)
+dev.off()  # Cluster species
+```
+
+
+#TAXA ABUNDANCE PLOTS FOR THE SPECIES, GENUS, KINGDOM, PHYLUM, AND FAMILY LEVELS
+
+#SPECIES
+```{r fig.width = 20}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+metadata_DSS13_ordered_c <- metadata_DSS13_c
+str(metadata_DSS13_ordered_c$Sample)
+metadata_DSS13_ordered_c <- metadata_DSS13_ordered_c %>%
+  mutate(Sample = factor(Sample, levels = desired_order_c))
+
+bracken_df_c_gut <- combined_data_c_S_gut %>%
+  rownames_to_column(var = "species_name")
+bracken_df_c_gut
+
+abundance_matrix_c_gut <- bracken_df_c_gut[, -1]
+relative_abundance_c_gut <- sweep(abundance_matrix_c_gut, 2, colSums(abundance_matrix_c_gut), FUN = "/") * 100  # Convert to percentage
+
+# Add the species names back
+relative_abundance_c_gut <- cbind(Species = bracken_df_c_gut[, 1], relative_abundance_c_gut)
+
+relative_abundance_c_gut
+# Step 3: Select the top 50 taxa
+# Sum relative abundances across all samples for each species
+relative_abundance_c_gut <- relative_abundance_c_gut %>%
+  mutate(TotalAbundance = rowSums(select(., -Species))) %>%
+  arrange(desc(TotalAbundance)) %>%
+  top_n(50, TotalAbundance)  # Select top 30 taxa by abundance
+
+long_format_c_gut <- relative_abundance_c_gut %>%
+  select(-TotalAbundance) %>%
+  pivot_longer(cols = -Species, names_to = "Sample", values_to = "RelativeAbundance")
+long_format_c_gut$Sample <- factor(long_format_c_gut$Sample, levels = desired_order_c)
+long_format_c_gut <- long_format_c_gut %>%
+  left_join(metadata_DSS13_ordered_c, by = c("Sample" = "Sample"))  # Join metadata with abundance data
+colnames(long_format_c_gut)[colnames(long_format_c_gut) == "Treatment.x"] <- "Treatment"
+
+long_format_c_gut$Sample <- factor(long_format_c_gut$Sample, levels = desired_order_c)
+metadata_DSS13_ordered_c$Sample <- factor(metadata_DSS13_ordered_c$Sample, levels = desired_order_c)
+
+
+species_taxchart_c_gut <- ggplot(long_format_c_gut, aes(x = Sample, y = RelativeAbundance, fill = Species)) +
+  geom_bar(stat = "identity", position = "stack", color = "black", size = 0.3) +
+  labs(
+    title = "Relative Abundance: Species Level",
+    x = "Sample (Grouped by Treatment)",
+    y = "Relative Abundance (%)",
+    fill = "Taxa"
+  ) +
+  theme_minimal() +
+  theme(
+    # General text properties
+    text = element_text(size = 14, color = "black", face = "bold"),  # Apply to all text
+    
+    # Title
+    plot.title = element_text(size = 18, face = "bold", color = "black", hjust = 0.5),
+    
+    # Axis titles
+    axis.title.x = element_text(size = 16, face = "bold", color = "black"),
+    axis.title.y = element_text(size = 16, face = "bold", color = "black"),
+    
+    # Axis text
+    axis.text.x = element_text(size = 6,face = "plain", color = "black", angle = 45, hjust = 0.5),
+    axis.text.y = element_text(size = 14, face = "bold", color = "black"),
+    
+    # Legend text
+   # legend.title = element_text(size = 16, face = "bold", color = "black"),
+   # legend.text = element_text(size = 14, face = "bold", color = "black"),
+    
+    # Facet text
+    strip.text = element_text(size = 14, face = "bold", color = "black")
+  ) +
+  facet_wrap(~ Treatment, scales = "free_x", nrow = 1)  # Group samples by Treatment
+
+species_taxchart_c_gut
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/TaxaRelativeAbundance_BarPlots/species_taxchart_c_gutdb.jpeg", plot = species_taxchart_c_gut, width = 17, height = 10, dpi = 300)
+
+```
+
+```{r fig.width=12}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+
+# Step 2: Select the Top 30 Taxa
+relative_abundance_c_gut <- relative_abundance_c_gut %>%
+  mutate(TotalAbundance = rowSums(select(., -Species))) %>%  # Sum across samples
+  arrange(desc(TotalAbundance)) 
+
+relative_abundance_c_gut <- relative_abundance_c_gut[1:30, ]# Sort by total abundance
+    # Keep only the top 30 taxa
+
+# Step 3: Pivot to Long Format
+long_format_c_gut <- relative_abundance_c_gut %>%
+  select(-TotalAbundance) %>%
+  pivot_longer(cols = -Species, names_to = "Sample", values_to = "RelativeAbundance")
+
+# Merge with metadata
+long_format_c_gut <- long_format_c_gut %>%
+  left_join(metadata_DSS13_ordered_c, by = c("Sample" = "Sample"))
+
+# Step 4: Calculate Average Relative Abundance by Treatment
+average_abundance_c_gut <- long_format_c_gut %>%
+  group_by(Treatment, Species) %>%
+  summarise(RelativeAbundance = mean(RelativeAbundance, na.rm = TRUE), .groups = "drop")  # Calculate mean
+
+# Step 5: Create Bar Chart
+species_taxchart_c_gut_avg <- ggplot(average_abundance_c_gut, aes(x = Treatment, y = RelativeAbundance, fill = Species)) +
+  geom_bar(stat = "identity", position = "stack", color = "black", size = 0.3) +
+  labs(
+    title = "Average Relative Abundance: Species Level",
+    x = "Treatment Group",
+    y = "Average Relative Abundance (%)",
+    fill = "Taxa"
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 14, color = "black", face = "bold"),  # General text
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),  # Title
+    axis.title.x = element_text(size = 16, face = "bold"),  # Axis titles
+    axis.title.y = element_text(size = 16, face = "bold"),
+    axis.text.x = element_text(size = 12, angle = 45, hjust = 1),  # Rotate x-axis text
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 16, face = "bold"),  # Legend text
+    legend.text = element_text(size = 14)
+  )
+
+# View and save the plot
+print(species_taxchart_c_gut_avg)
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/TaxaRelativeAbundance_BarPlots/species_taxchart_c_average.jpeg",
+       plot = species_taxchart_c_gut_avg, width = 17, height = 10, dpi = 300)
+
+```
+
+#GENUS
+```{r fig.width = 17}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tibble)       
+
+bracken_G_c_gut <- combined_data_bracken_G_c_gut %>%
+  rownames_to_column(var = "Sample")
+bracken_G_c_gut
+
+abundance_matrix_c_gut <- bracken_G_c_gut[, -1]
+relative_abundance_c_gut <- sweep(abundance_matrix_c_gut, 2, colSums(abundance_matrix_c_gut), FUN = "/") * 100  # Convert to percentage
+
+# Add the species names back
+relative_abundance_c_gut <- cbind(Species = bracken_G_c_gut[, 1], relative_abundance_c_gut)
+
+# Step 3: Select the top 50 taxa
+# Sum relative abundances across all samples for each species
+relative_abundance_c_gut <- relative_abundance_c_gut %>%
+  mutate(TotalAbundance = rowSums(select(., -Species))) %>%  # Sum across samples
+  arrange(desc(TotalAbundance)) 
+
+relative_abundance_c_gut <- relative_abundance_c_gut[1:30, ]# Sort by total abundance
+    # Keep only the top 30 taxa
+
+long_format_c_gut <- relative_abundance_c_gut %>%
+  select(-TotalAbundance) %>%
+  pivot_longer(cols = -Species, names_to = "Sample", values_to = "RelativeAbundance")
+long_format_c_gut$Sample <- factor(long_format_c_gut$Sample, levels = desired_order_c)
+long_format_c_gut <- long_format_c_gut %>%
+  left_join(metadata_DSS13_ordered_c, by = c("Sample" = "Sample"))  # Join metadata with abundance data
+colnames(long_format_c_gut)[colnames(long_format_c_gut) == "Treatment.x"] <- "Treatment"
+
+long_format_c_gut$Sample <- factor(long_format_c_gut$Sample, levels = desired_order_c)
+metadata_DSS13_ordered_c$Sample <- factor(metadata_DSS13_ordered_c$Sample, levels = desired_order_c)
+
+
+genus_taxchart_c_gut <- ggplot(long_format_c_gut, aes(x = Sample, y = RelativeAbundance, fill = Species)) +
+  geom_bar(stat = "identity", position = "stack", color = "black", size = 0.3) +
+  labs(
+    title = "Relative Abundance: Genus Level",
+    x = "Sample (Grouped by Treatment)",
+    y = "Relative Abundance (%)",
+    fill = "Taxa"
+  ) +
+  theme_minimal() +
+  theme(
+    # General text properties
+    text = element_text(size = 14, color = "black", face = "bold"),  # Apply to all text
+    
+    # Title
+    plot.title = element_text(size = 18, face = "bold", color = "black", hjust = 0.5),
+    
+    # Axis titles
+    axis.title.x = element_text(size = 16, face = "bold", color = "black"),
+    axis.title.y = element_text(size = 16, face = "bold", color = "black"),
+    
+    # Axis text
+    axis.text.x = element_text(size = 6,face = "plain", color = "black", angle = 45, hjust = 0.5),
+    axis.text.y = element_text(size = 14, face = "bold", color = "black"),
+    
+    # Legend text
+    legend.title = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 14, face = "bold", color = "black"),
+    
+    # Facet text
+    strip.text = element_text(size = 14, face = "bold", color = "black")
+  ) +
+  facet_wrap(~ Treatment, scales = "free_x", nrow = 1)  # Group samples by Treatment
+
+genus_taxchart_c_gut
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/TaxaRelativeAbundance_BarPlots/genus_taxchart_c.jpeg", plot = genus_taxchart_c_gut, width = 17, height = 10, dpi = 300)
+```
+
+```{r fig.width=10}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tibble)
+
+# Step 1: Add sample names as a column
+bracken_G_c_gut <- combined_data_bracken_G_c_gutdb %>%
+  rownames_to_column(var = "Sample")
+
+
+# Step 4: Select the top 30 genera based on total abundance across all samples
+relative_abundance_c_gut <- relative_abundance_c_gut %>%
+  mutate(TotalAbundance = rowSums(select(., -Species))) %>%  # Sum across all samples
+  arrange(desc(TotalAbundance)) %>%  # Sort by TotalAbundance
+  filter(rank(-TotalAbundance) <= 30)  # Select top 30 genera
+relative_abundance_c_gut
+# Step 5: Reshape to long format for ggplot
+long_format_c_gut <- relative_abundance_c_gut %>%
+  select(-TotalAbundance) %>%
+  pivot_longer(cols = -Species, names_to = "Sample", values_to = "RelativeAbundance")
+
+# Step 6: Add metadata and calculate average relative abundance by treatment group
+long_format_c_gut <- long_format_c_gut %>%
+  left_join(metadata_DSS13_ordered_c, by = c("Sample" = "Sample"))  # Join with metadata
+
+# Calculate average relative abundance by treatment group
+average_abundance_c_gut <- long_format_c_gut %>%
+  group_by(Treatment, Species) %>%
+  summarise(RelativeAbundance = mean(RelativeAbundance, na.rm = TRUE), .groups = "drop")  # Calculate mean
+
+# Step 7: Create the bar chart
+genus_taxchart_c_gut_avg <- ggplot(average_abundance_c_gut, aes(x = Treatment, y = RelativeAbundance, fill = Species)) +
+  geom_bar(stat = "identity", position = "stack", color = "black", size = 0.3) +
+  labs(
+    title = "Average Relative Abundance: Genus Level",
+    x = "Treatment Group",
+    y = "Average Relative Abundance (%)",
+    fill = "Taxa"
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 14, color = "black", face = "bold"),  # General text properties
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),  # Title
+    axis.title.x = element_text(size = 16, face = "bold"),  # Axis titles
+    axis.title.y = element_text(size = 16, face = "bold"),
+    axis.text.x = element_text(size = 12, angle = 45, hjust = 1),  # Rotate x-axis text
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 16, face = "bold"),  # Legend text
+    legend.text = element_text(size = 14)
+  )
+
+# Step 8: Save the plot
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/TaxaRelativeAbundance_BarPlots/genus_taxchart_c_average.jpeg", plot = genus_taxchart_c_gut_avg, width = 17, height = 10, dpi = 300)
+
+# View the plot
+print(genus_taxchart_c_gut_avg)
+
+```
+
+
+
+
+
+
+#PHYLUM
+```{r fig.width = 17}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tibble)       
+
+bracken_P_c_gut <- combined_data_bracken_P_c_gut %>%
+  rownames_to_column(var = "Sample")
+bracken_P_c_gut
+
+abundance_matrix_c_gut <- bracken_P_c_gut[, -1]
+relative_abundance_c_gut <- sweep(abundance_matrix_c_gut, 2, colSums(abundance_matrix_c_gut), FUN = "/") * 100  # Convert to percentage
+
+# Add the species names back
+relative_abundance_c_gut <- cbind(Species = bracken_P_c_gut[, 1], relative_abundance_c_gut)
+
+relative_abundance_c_gut <- relative_abundance_c_gut %>%
+  mutate(TotalAbundance = rowSums(select(., -Species))) %>%
+  arrange(desc(TotalAbundance)) %>%
+  slice(1:30)  # Keep only the top 30 taxa
+
+long_format_c_gut <- relative_abundance_c_gut %>%
+  select(-TotalAbundance) %>%
+  pivot_longer(cols = -Species, names_to = "Sample", values_to = "RelativeAbundance")
+long_format_c_gut$Sample <- factor(long_format_c_gut$Sample, levels = desired_order_c)
+long_format_c_gut <- long_format_c_gut %>%
+  left_join(metadata_DSS13_ordered_c, by = c("Sample" = "Sample"))  # Join metadata with abundance data
+colnames(long_format_c_gut)[colnames(long_format_c_gut) == "Treatment.x"] <- "Treatment"
+
+long_format_c_gut$Sample <- factor(long_format_c_gut$Sample, levels = desired_order_c)
+metadata_DSS13_ordered_c$Sample <- factor(metadata_DSS13_ordered_c$Sample, levels = desired_order_c)
+
+
+phylum_taxchart_c_gut <- ggplot(long_format_c_gut, aes(x = Sample, y = RelativeAbundance, fill = Species)) +
+  geom_bar(stat = "identity", position = "stack", color = "black", size = 0.3) +
+  labs(
+    title = "Relative Abundance: Phylum Level",
+    x = "Sample (Grouped by Treatment)",
+    y = "Relative Abundance (%)",
+    fill = "Taxa"
+  ) +
+  theme_minimal() +
+  theme(
+    # General text properties
+    text = element_text(size = 14, color = "black", face = "bold"),  # Apply to all text
+    
+    # Title
+    plot.title = element_text(size = 18, face = "bold", color = "black", hjust = 0.5),
+    
+    # Axis titles
+    axis.title.x = element_text(size = 16, face = "bold", color = "black"),
+    axis.title.y = element_text(size = 16, face = "bold", color = "black"),
+    
+    # Axis text
+    axis.text.x = element_text(size = 6,face = "plain", color = "black", angle = 45, hjust = 0.5),
+    axis.text.y = element_text(size = 14, face = "bold", color = "black"),
+    
+    # Legend text
+    legend.title = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 14, face = "bold", color = "black"),
+    
+    # Facet text
+    strip.text = element_text(size = 14, face = "bold", color = "black")
+  ) +
+  facet_wrap(~ Treatment, scales = "free_x", nrow = 1)  # Group samples by Treatment
+
+phylum_taxchart_c_gut
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/TaxaRelativeAbundance_BarPlots/phylum_taxchart_c.jpeg", plot = phylum_taxchart_c_gut, width = 17, height = 10, dpi = 300)
+```
+
+```{r fig.width=10}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tibble)
+
+
+relative_abundance_c_gut <- relative_abundance_c_gut %>%
+  mutate(TotalAbundance = rowSums(select(., -Species))) %>%  # Sum across all samples
+  arrange(desc(TotalAbundance)) %>%  # Sort by TotalAbundance
+  filter(rank(-TotalAbundance) <= 30)  # Select top 30 genera
+relative_abundance_c_gut
+# Step 5: Reshape to long format for ggplot
+long_format_c_gut <- relative_abundance_c_gut %>%
+  select(-TotalAbundance) %>%
+  pivot_longer(cols = -Species, names_to = "Sample", values_to = "RelativeAbundance")
+
+# Step 6: Add metadata and calculate average relative abundance by treatment group
+long_format_c_gut <- long_format_c_gut %>%
+  left_join(metadata_DSS13_ordered_c, by = c("Sample" = "Sample"))  # Join with metadata
+
+# Calculate average relative abundance by treatment group
+average_abundance_c_gut <- long_format_c_gut %>%
+  group_by(Treatment, Species) %>%
+  summarise(RelativeAbundance = mean(RelativeAbundance, na.rm = TRUE), .groups = "drop")  # Calculate mean
+
+# Step 7: Create the bar chart
+phylum_taxchart_c_gut_avg <- ggplot(average_abundance_c_gut, aes(x = Treatment, y = RelativeAbundance, fill = Species)) +
+  geom_bar(stat = "identity", position = "stack", color = "black", size = 0.3) +
+  labs(
+    title = "Average Relative Abundance: Phylum Level",
+    x = "Treatment Group",
+    y = "Average Relative Abundance (%)",
+    fill = "Taxa"
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 14, color = "black", face = "bold"),  # General text properties
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),  # Title
+    axis.title.x = element_text(size = 16, face = "bold"),  # Axis titles
+    axis.title.y = element_text(size = 16, face = "bold"),
+    axis.text.x = element_text(size = 12, angle = 45, hjust = 1),  # Rotate x-axis text
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 16, face = "bold"),  # Legend text
+    legend.text = element_text(size = 14)
+  )
+
+# Step 8: Save the plot
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/TaxaRelativeAbundance_BarPlots/phylum_taxchart_c_average.jpeg", plot = phylum_taxchart_c_gut_avg, width = 17, height = 10, dpi = 300)
+
+print(phylum_taxchart_c_gut_avg)
+
+```
+
+#FAMILY
+```{r fig.width = 17}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tibble)   
+
+bracken_F_c_gut <- combined_data_bracken_F_c_gut %>%
+  rownames_to_column(var = "Sample")
+bracken_F_c_gut
+
+abundance_matrix_c_gut <- bracken_F_c_gut[, -1]
+relative_abundance_c_gut <- sweep(abundance_matrix_c_gut, 2, colSums(abundance_matrix_c_gut), FUN = "/") * 100  # Convert to percentage
+
+# Add the species names back
+relative_abundance_c_gut <- cbind(Species = bracken_F_c_gut[, 1], relative_abundance_c_gut)
+
+relative_abundance_c_gut <- relative_abundance_c_gut %>%
+  mutate(TotalAbundance = rowSums(select(., -Species))) %>%
+  arrange(desc(TotalAbundance)) %>%
+  slice(1:30)  # Keep only the top 30 taxa
+
+long_format_c_gut <- relative_abundance_c_gut %>%
+  select(-TotalAbundance) %>%
+  pivot_longer(cols = -Species, names_to = "Sample", values_to = "RelativeAbundance")
+long_format_c_gut$Sample <- factor(long_format_c_gut$Sample, levels = desired_order_c)
+long_format_c_gut <- long_format_c_gut %>%
+  left_join(metadata_DSS13_ordered_c, by = c("Sample" = "Sample"))  # Join metadata with abundance data
+colnames(long_format_c_gut)[colnames(long_format_c_gut) == "Treatment.x"] <- "Treatment"
+
+long_format_c_gut$Sample <- factor(long_format_c_gut$Sample, levels = desired_order_c)
+metadata_DSS13_ordered_c$Sample <- factor(metadata_DSS13_ordered_c$Sample, levels = desired_order_c)
+
+
+family_taxchart_c_gut <- ggplot(long_format_c_gut, aes(x = Sample, y = RelativeAbundance, fill = Species)) +
+  geom_bar(stat = "identity", position = "stack", color = "black", size = 0.3) +
+  labs(
+    title = "Relative Abundance: Family Level",
+    x = "Sample (Grouped by Treatment)",
+    y = "Relative Abundance (%)",
+    fill = "Taxa"
+  ) +
+  theme_minimal() +
+  theme(
+    # General text properties
+    text = element_text(size = 14, color = "black", face = "bold"),  # Apply to all text
+    
+    # Title
+    plot.title = element_text(size = 18, face = "bold", color = "black", hjust = 0.5),
+    
+    # Axis titles
+    axis.title.x = element_text(size = 16, face = "bold", color = "black"),
+    axis.title.y = element_text(size = 16, face = "bold", color = "black"),
+    
+    # Axis text
+    axis.text.x = element_text(size = 6,face = "plain", color = "black", angle = 45, hjust = 0.5),
+    axis.text.y = element_text(size = 14, face = "bold", color = "black"),
+    
+    # Legend text
+    legend.title = element_text(size = 16, face = "bold", color = "black"),
+    legend.text = element_text(size = 14, face = "bold", color = "black"),
+    
+    # Facet text
+    strip.text = element_text(size = 14, face = "bold", color = "black")
+  ) +
+  facet_wrap(~ Treatment, scales = "free_x", nrow = 1)  # Group samples by Treatment
+
+family_taxchart_c_gut
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/TaxaRelativeAbundance_BarPlots/family_taxchart_c.jpeg", plot = family_taxchart_c_gut, width = 17, height = 10, dpi = 300)
+```
+
+```{r fig.width=10}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tibble)
+
+# Step 1: Add sample names as a column
+bracken_F_c_gut <- combined_data_bracken_F_c_gut %>%
+  rownames_to_column(var = "Sample")
+
+# Step 2: Normalize abundances to relative abundances
+abundance_matrix_c_gut <- bracken_F_c_gut[, -1]
+relative_abundance_c_gut <- sweep(abundance_matrix_c_gut, 2, colSums(abundance_matrix_c_gut), FUN = "/") * 100  # Convert to percentages
+
+# Step 3: Add the family names back
+relative_abundance_c_gut <- cbind(Species = bracken_F_c_gut[, 1], relative_abundance_c_gut)
+
+
+
+
+relative_abundance_c_gut <- relative_abundance_c_gut %>%
+  mutate(TotalAbundance = rowSums(select(., -Species))) %>%  # Sum across all samples
+  arrange(desc(TotalAbundance)) %>%  # Sort by TotalAbundance
+  filter(rank(-TotalAbundance) <= 30)  # Select top 30 genera
+relative_abundance_c_gut
+# Step 5: Reshape to long format for ggplot
+long_format_c_gut <- relative_abundance_c_gut %>%
+  select(-TotalAbundance) %>%
+  pivot_longer(cols = -Species, names_to = "Sample", values_to = "RelativeAbundance")
+
+# Step 6: Add metadata and calculate average relative abundance by treatment group
+long_format_c_gut <- long_format_c_gut %>%
+  left_join(metadata_DSS13_ordered_c, by = c("Sample" = "Sample"))  # Join with metadata
+
+# Calculate average relative abundance by treatment group
+average_abundance_c_gut <- long_format_c_gut %>%
+  group_by(Treatment, Species) %>%
+  summarise(RelativeAbundance = mean(RelativeAbundance, na.rm = TRUE), .groups = "drop")  # Calculate mean
+
+# Step 7: Create the bar chart
+family_taxchart_c_gut_avg <- ggplot(average_abundance_c_gut, aes(x = Treatment, y = RelativeAbundance, fill = Species)) +
+  geom_bar(stat = "identity", position = "stack", color = "black", size = 0.3) +
+  labs(
+    title = "Average Relative Abundance: Family Level",
+    x = "Treatment Group",
+    y = "Average Relative Abundance (%)",
+    fill = "Taxa"
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 14, color = "black", face = "bold"),  # General text properties
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),  # Title
+    axis.title.x = element_text(size = 16, face = "bold"),  # Axis titles
+    axis.title.y = element_text(size = 16, face = "bold"),
+    axis.text.x = element_text(size = 12, angle = 45, hjust = 1),  # Rotate x-axis text
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 16, face = "bold"),  # Legend text
+    legend.text = element_text(size = 14)
+  )
+
+# Step 8: Save the plot
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/TaxaRelativeAbundance_BarPlots/family_taxchart_c_average.jpeg",
+       plot = family_taxchart_c_gut_avg, width = 17, height = 10, dpi = 300)
+
+# View the plot
+print(family_taxchart_c_gut_avg)
+
+```
+
+#Generate phyloseq object and make plots for diversity 
+
+```{r fig.height= 8}
+library(phyloseq)
+library(dplyr)
+library(tidyr)
+
+
+metadata_phy <- metadata_DSS13_gut
+rownames(metadata_phy) <- metadata_phy$Sample
+metadata_phy <- metadata_phy[, -which(colnames(metadata_phy) == "Sample")]
+head(metadata_phy)
+metadata_phy <- sample_data(metadata_phy)
+
+otu_phy <- bracken_df_c_gut
+rownames(otu_phy) <- otu_phy$species_name
+otu_phy <- otu_phy %>% select(-species_name)
+otu_phy <- as.matrix(otu_phy)
+otu_phy <- otu_table(otu_phy, taxa_are_rows = TRUE)
+
+physeq <- phyloseq(otu_phy, metadata_phy)
+diversity_data <- estimate_richness(physeq, measures = c("Shannon", "Chao1"))
+metadata <- sample_data(physeq)  # Extract sample metadata
+diversity_data <- cbind(metadata, diversity_data)  
+
+# Reorder Treatment factor levels
+diversity_data$Treatment <- factor(diversity_data$Treatment, 
+                                   levels = c("Control", "DSS", "ZnO+DSS", "DSS+ZnO", "DSS+ZnI"))
+```
+
+```{r}
+library(phyloseq)
+library(ggplot2)
+library(dplyr)
+
+# Summarize taxa abundances across all samples
+taxa_sums_df <- data.frame(taxa = taxa_names(physeq),
+                           abundance = taxa_sums(physeq)) %>%
+  arrange(desc(abundance))  # Sort in descending order
+
+# Select the top 50 taxa
+top_50_taxa <- taxa_sums_df$taxa[1:50]
+physeq_top50 <- prune_taxa(top_50_taxa, physeq)
+physeq_grouped <- merge_samples(physeq_top50, "Treatment", fun = mean)
+
+# Rename sample names to match treatment groups
+# Assign sample names to Treatment group names
+sample_data(physeq_grouped)$Treatment <- factor(sample_names(physeq_grouped), 
+                                                levels = c("Control", "DSS", "ZnO+DSS", "DSS+ZnO", "DSS+ZnI"))
+
+# Rename sample names to match treatment groups
+sample_names(physeq_grouped) <- sample_data(physeq_grouped)$Treatment
+
+colnames(otu_table(physeq_grouped))
+species_heatmap_physeq <- plot_heatmap(physeq_grouped, 
+             sample.label = "Treatment",
+             
+             low = "#000033", high = "#FF3300") +
+  labs(y = "Species", x = "Treatment Group", title = "Top 50 Species Across Treatment Groups") +  # Explicitly label x and y axes
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.5, size = 14),  # Rotate x-axis labels for readability
+        axis.text.y = element_text(size = 7), 
+        axis.title.y = element_text(size = 16, face = "bold"),
+        axis.title.x = element_text(size = 16, face = "bold"))
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/heatmap_top30_species.png", plot = species_heatmap_physeq, width = 10, height = 10, dpi = 300)
+
+```
+
+```{r}
+library(phyloseq)
+library(ggplot2)
+
+# Aggregate by Treatment Group (keeping all taxa)
+physeq_grouped_all <- merge_samples(physeq, "Treatment", fun = mean)
+
+# Assign sample names to Treatment group names
+sample_data(physeq_grouped_all)$Treatment <- factor(sample_names(physeq_grouped_all), 
+                                                    levels = c("Control", "DSS", "ZnO+DSS", "DSS+ZnO", "DSS+ZnI"))
+
+# Rename sample names to match treatment groups
+sample_names(physeq_grouped_all) <- sample_data(physeq_grouped_all)$Treatment
+
+# Generate the heatmap with all species, longer graph for better readability
+heatmap_plot <- plot_heatmap(physeq_grouped_all, 
+             sample.label = "Treatment",
+             taxa.label = "Species",  # Ensures y-axis labels show species names
+             low = "#000033", high = "#FF3300") +
+
+  labs(y = "Species", x = "Treatment Group", title = "Microbial Composition Across Treatments") +  # Add title
+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 14),  # Rotate x-axis labels
+        axis.text.y = element_text(size = 6),  # Smaller y-axis labels to fit species names
+        axis.title.y = element_text(size = 16, face = "bold"),
+        axis.title.x = element_text(size = 16, face = "bold"),
+        plot.title = element_text(size = 18, face = "bold")) +
+  
+  theme(plot.margin = margin(10, 10, 10, 10))  # Add padding to prevent text cut-off
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/heatmap_all_species.png", plot = heatmap_plot, width = 10, height = 15, dpi = 300)
+```
+
+
+```{r}
+# Check if any singletons exist in your dataset
+summary(taxa_sums(physeq))
+
+# Count taxa with only 1 read (singletons)
+sum(taxa_sums(physeq) == 1)
+
+
+physeq <- prune_taxa(taxa_sums(physeq) > 0, physeq)  # Keep all nonzero taxa
+
+# Check if metadata was properly merged
+head(sample_data(physeq))  # Ensure it contains "Treatment"
+head(diversity_data)  # Ensure "Treatment" is present
+
+# If Treatment is missing, rebind metadata
+diversity_data <- estimate_richness(physeq, measures = c("Observed", "Shannon", "Chao1"))
+rownames(diversity_data) <- sub("^X", "", rownames(diversity_data))
+metadata <- as.data.frame(sample_data(physeq))  # Extract metadata as dataframe
+diversity_data <- cbind(metadata, diversity_data)  # Merge metadata
+
+diversity_data
+metadata 
+```
+
+
+```{r}
+library(ggplot2)
+library(ggpubr)  # Required for stat_compare_means()
+
+diversity_data$Treatment <- factor(diversity_data$Treatment, 
+                                   levels = c("Control", "DSS", "ZnO+DSS", "DSS+ZnO", "DSS+ZnI"))
+
+
+# Define treatment group comparisons
+comparisons <- list(
+  #c("Control", "DSS"),
+ # c("Control", "ZnO+DSS"),
+ # c("Control", "DSS+ZnO"),
+ # c("Control", "DSS+ZnI"),
+  #c("DSS", "ZnO+DSS"),
+  c("DSS", "DSS+ZnO"),
+  #c("DSS", "DSS+ZnI"),
+  #c("ZnO+DSS", "DSS+ZnO"),
+  c("ZnO+DSS", "DSS+ZnI"),
+  c("DSS+ZnO", "DSS+ZnI")
+)
+
+# Boxplot with significance testing
+violin_observed_species <- ggplot(diversity_data, aes(x = Treatment, y = Observed, fill = Treatment)) +
+  geom_boxplot(width = 0.8, color = "black", outlier.shape = NA) +  # Boxplot without outliers
+  scale_fill_manual(values = ann_colors) +
+  stat_compare_means(
+    method = "wilcox.test",  # Use Wilcoxon test (Mann-Whitney U test)
+    label = "p.signif",  # Show p-value significance levels
+    comparisons = comparisons
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Observed Species Across Treatment Groups",
+    x = "Treatment Groups",
+    y = "Observed Taxa"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    axis.title.x = element_text(size = 16, face = "bold"),
+    axis.title.y = element_text(size = 16, face = "bold"),
+    axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 14),
+    legend.position = "none"
+  )
+
+# Display plot
+print(violin_observed_species)
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/DiversityPlots/observed_species_boxplot.jpeg", 
+       plot = violin_observed_species, 
+       width = 8, height = 6)
+```
+#CALCULATE SHANNON AND CHAO1 DIVERSITY METRICS
+
+```{r fig.height= 5}
+shannon_gutdb <- ggplot(diversity_data, aes(x = Treatment, y = Shannon, fill = Treatment)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +  # Boxplot without outliers
+  #geom_jitter(width = 0.2, size = 2, alpha = 0.8) +  # Add individual points
+  theme_minimal() +
+  labs(title = "Shannon Diversity Index Across Treatments",
+       x = "Treatment",
+       y = "Shannon Index") +
+  theme(legend.position = "none") +
+  scale_fill_manual(values = ann_colors) +
+  stat_compare_means(method = "kruskal.test") +
+  stat_compare_means(comparisons = list(
+  c("Control", "DSS"),
+  #c("Control", "DSS+ZnI"),
+  c("Control", "DSS+ZnO"),
+  c("Control", "ZnO+DSS"),
+  #c("DSS", "ZnO+DSS"), 
+  #c("DSS", "DSS+ZnI"), 
+  #c("DSS", "DSS+ZnO"), 
+  #c("DSS+ZnI", "DSS+ZnO"),
+  #c("DSS+ZnI", "ZnO+DSS"),
+  c("DSS+ZnO", "ZnO+DSS")), method = "wilcox.test", p.adjust.method = "BH", label = "p.signif") +
+  
+  # Make text and labels bigger
+  theme(
+    text = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title.x = element_text(size = 16, face = "bold"),
+    axis.title.y = element_text(size = 16, face = "bold"),
+    plot.title = element_text(size = 18, face = "bold")
+  )
+  
+  
+# Chao1 Richness Boxplot
+chao1_gutdb <- ggplot(diversity_data, aes(x = Treatment, y = Chao1, fill = Treatment)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +  
+  #geom_jitter(width = 0.2, size = 2, alpha = 0.8) +  
+  theme_minimal() +
+  labs(title = "Chao1 Richness Index Across Treatments",
+       x = "Treatment",
+       y = "Chao1 Index") +
+  scale_fill_manual(values = ann_colors) +
+  scale_x_discrete(limits = c("Control", "DSS", "ZnO+DSS", "DSS+ZnO", "DSS+ZnI")) +
+  # Add Kruskal-Wallis p-value
+  stat_compare_means(method = "kruskal.test", label.y = max(diversity_data$Chao1) + 0.2, size = 6) +
+  stat_compare_means(comparisons = list(
+  #c("Control", "DSS"),
+  #c("Control", "DSS+ZnI"),
+  #c("Control", "DSS+ZnO"),
+  #c("Control", "ZnO+DSS"),
+  #c("DSS", "ZnO+DSS"), 
+  #c("DSS", "DSS+ZnI"), 
+  c("DSS", "DSS+ZnO"), 
+  c("DSS+ZnI", "DSS+ZnO"),
+  c("DSS+ZnI", "ZnO+DSS")),
+  #c("DSS+ZnO", "ZnO+DSS")),
+  method = "wilcox.test", p.adjust.method = "BH", label = "p.signif") +
+  theme(
+    text = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title.x = element_text(size = 16, face = "bold"),
+    axis.title.y = element_text(size = 16, face = "bold"),
+    plot.title = element_text(size = 18, face = "bold")
+  )
+
+kruskal.test(Shannon ~ Treatment, data = diversity_data)
+kruskal.test(Chao1 ~ Treatment, data = diversity_data)
+
+pairwise.wilcox.test(diversity_data$Shannon, diversity_data$Treatment, p.adjust.method = "BH")
+pairwise.wilcox.test(diversity_data$Chao1, diversity_data$Treatment, p.adjust.method = "BH")
+
+# Define the file path
+
+# Save the plot
+ggsave(filename = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/DiversityPlots/Shannon_all.jpeg", plot = shannon_gutdb, width = 8, height = 6, dpi = 300)
+ggsave(filename = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/DiversityPlots/Chao1_all.jpeg", plot = chao1_gutdb, width = 8, height = 6, dpi = 300)
+
+
+
+```
+
+
+```{r}
+head(diversity_data)
+summary(diversity_data$Chao1)
+summary(diversity_data$Observed)
+sum(taxa_sums(physeq) == 9)
+```
+
+
+
+
+#DIFFERENTIAL EXPRESSION ANALYSIS USING Maaslin2
+
+```{r}
+count_data_ancom_c_gut <- combined_data_c_S_gut  # Taxa abundance matrix
+count_data_G_c_gut <- combined_data_bracken_G_c_gut
+count_data_P_c_gut <- combined_data_bracken_P_c_gut
+count_data_F_c_gut <- combined_data_bracken_F_c_gut
+
+count_data_ancom_c <- count_data_ancom_c[rowSums(count_data_ancom_c) > 4, ]
+count_data_G_c <- count_data_G_c[rowSums(count_data_G_c) > 4, ]
+count_data_P_c <- count_data_P_c[rowSums(count_data_P_c) > 4, ]
+count_data_F_c <- count_data_F_c[rowSums(count_data_F_c) > 4, ]
+
+#prevalence_threshold <- 0.06  # Taxa must appear in at least 6% of samples
+#prevalence_c <- rowSums(count_data_ancom_c > 0) / ncol(count_data_ancom_c)
+#prevalence_G_c <- rowSums(count_data_G_c > 0) / ncol(count_data_G_c)
+#prevalence_K_c <- rowSums(count_data_K_c > 0) / ncol(count_data_K_c)
+#prevalence_P_c <- rowSums(count_data_P_c > 0) / ncol(count_data_P_c)
+#prevalence_F_c <- rowSums(count_data_F_c > 0) / ncol(count_data_F_c)
+
+#count_data_ancom_c <- count_data_ancom_c[prevalence >= prevalence_threshold, ]
+#count_data_G_c <- count_data_G_c[prevalence >= prevalence_G_c, ]
+#count_data_K_c <- count_data_K_c[prevalence >= prevalence_K_c, ]
+#count_data_P_c <- count_data_P_c[prevalence >= prevalence_P_c, ]
+#count_data_F_c <- count_data_F_c[prevalence >= prevalence_F_c, ]
+
+count_data_ancom_c_gut
+count_data_G_c_gut
+count_data_P_c_gut
+count_data_F_c_gut 
+
+metadata_ancom_c_gut <- metadata_DSS13_gut  # Metadata containing treatment groups
+rownames(metadata_ancom_c_gut) <- metadata_ancom_c_gut$Sample
+metadata_ancom_c_gut <- metadata_ancom_c_gut[ , !(names(metadata_ancom_c_gut) %in% "Sample")]
+
+metadata_ancom_ref_control_c_gut <- metadata_ancom_c_gut
+metadata_ancom_ref_DSS_c_gut <- metadata_ancom_c_gut
+
+metadata_ancom_ref_control_c_gut$Treatment <- factor(metadata_ancom_ref_control_c_gut$Treatment, levels = c("Control", "DSS", "ZnO+DSS", "DSS+ZnO", "DSS+ZnI" ))
+metadata_ancom_ref_DSS_c_gut$Treatment <- factor(metadata_ancom_ref_DSS_c_gut$Treatment, levels = c("DSS", "Control", "ZnO+DSS", "DSS+ZnO", "DSS+ZnI"))
+
+physeq_ref_control_c_gut <- phyloseq(
+  otu_table(count_data_ancom_c_gut, taxa_are_rows = TRUE),  # Taxa abundance matrix
+  sample_data(metadata_ancom_ref_control_c_gut)                        # Metadata
+)
+
+physeq_ref_DSS_c_gut <- phyloseq(
+  otu_table(count_data_ancom_c_gut, taxa_are_rows = TRUE),  # Taxa abundance matrix
+  sample_data(metadata_ancom_ref_DSS_c_gut)                        # Metadata
+)
+
+```
+
+#DIFFERENTIAL EXPRESSION AT S, G, K, P, F LEVELS
+```{r}
+library(Maaslin2)
+
+bracken_df_t_S_c_gut <- t(count_data_ancom_c_gut)
+bracken_df_t_S_c_gut <- as.data.frame(bracken_df_t_S_c_gut)
+bracken_df_t_G_c_gut <- t(count_data_G_c_gut)
+bracken_df_t_G_c_gut <- as.data.frame(bracken_df_t_G_c_gut)
+bracken_df_t_P_c_gut <- t(count_data_P_c_gut)
+bracken_df_t_P_c_gut <- as.data.frame(bracken_df_t_P_c_gut)
+bracken_df_t_F_c_gut <- t(count_data_F_c_gut)
+bracken_df_t_F_c_gut <- as.data.frame(bracken_df_t_F_c_gut)
+
+bracken_df_t_S_c_gut
+
+masalin_results_S_refC_c_gut <- Maaslin2(
+  bracken_df_t_S_c_gut,
+  metadata_ancom_ref_control_c_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/Maaslin2_results_refC_c_gut",     # Output directory
+  fixed_effects = c("Treatment")  # Specify the grouping variable in your metadata
+)
+
+masalin_results_S_refDSS_c_gut <- Maaslin2(
+  bracken_df_t_S_c_gut,
+  metadata_ancom_ref_DSS_c_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/Maaslin2_results_refDSS_c_gut",     # Output directory
+  fixed_effects = c("Treatment")  # Specify the grouping variable in your metadata
+)
+
+masalin_results_G_refC_c_gut <- Maaslin2(
+  bracken_df_t_G_c_gut,
+  metadata_ancom_ref_control_c_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/masalin_results_G_refC_c_gut",     # Output directory
+  fixed_effects = c("Treatment")  # Specify the grouping variable in your metadata
+)
+
+masalin_results_G_refDSS_c_gut <- Maaslin2(
+  bracken_df_t_G_c_gut,
+  metadata_ancom_ref_DSS_c_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/masalin_results_G_refDSS_c_gut",     # Output directory
+  fixed_effects = c("Treatment")  # Specify the grouping variable in your metadata
+)
+
+masalin_results_P_refC_c_gut <- Maaslin2(
+  bracken_df_t_P_c_gut,
+  metadata_ancom_ref_control_c_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/masalin_results_P_refC_c_gut",     # Output directory
+  fixed_effects = c("Treatment")  # Specify the grouping variable in your metadata
+)
+
+masalin_results_P_refDSS_c_gut <- Maaslin2(
+  bracken_df_t_P_c_gut,
+  metadata_ancom_ref_DSS_c_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/masalin_results_P_refDSS_c_gut",     # Output directory
+  fixed_effects = c("Treatment")  # Specify the grouping variable in your metadata
+)
+
+masalin_results_F_refC_c_gut <- Maaslin2(
+  bracken_df_t_F_c_gut,
+  metadata_ancom_ref_control_c_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/masalin_results_F_refC_c_gut",     # Output directory
+  fixed_effects = c("Treatment")  # Specify the grouping variable in your metadata
+)
+
+masalin_results_F_refDSS_c_gut <- Maaslin2(
+  bracken_df_t_F_c_gut,
+  metadata_ancom_ref_DSS_c_gut,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/masalin_results_F_refDSS_c_gut",     # Output directory
+  fixed_effects = c("Treatment")  # Specify the grouping variable in your metadata
+)
+
+
+```
+
+#HUMAN IBD VS DSS
+
+```{r}
+library(Maaslin2)
+# human data referenced can be found here https://www.frontiersin.org/journals/cellular-and-infection-microbiology/articles/10.3389/fcimb.2021.599734/full#h11
+
+human_metadata <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/HumanMicrobiome/Human_microbiome_metadata.csv", row.names = 1)
+human_reads <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/HumanMicrobiome/Human_microbiome_reads.csv", row.names = 1)
+
+human_reads_t <- t(human_reads)
+human_reads_t <- as.data.frame(human_reads_t)
+
+human_metadata$Group <- factor(human_metadata$Group, levels = c("Healthy", "IBD"))
+
+
+masalin_results_human <- Maaslin2(
+  human_reads_t,                           # Relative abundance dataframe
+  human_metadata,                                 # Corresponding metadata
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/1_16_25/DifferentialExpression/masalin_results_human",        # Output directory
+  fixed_effects = c("Group"),             # Specify the grouping variable in your metadata
+  normalization = "NONE",                      # Turn off normalization since data is already normalized
+  transform = "NONE"                           # Turn off transformation since data is relative abundance
+)
+#
+```
+
+```{r}
+#the below dataframe is what is upregulated in human IBD compared to health controls
+human_up <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/HumanMicrobiome/Upregulated_human_IBD.csv")
+#the below dataframe is what is downregulated in human IBD compared to health controls
+human_down <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/HumanMicrobiome/Downregulated_human_IBD.csv")
+#the below dataframe is what is upregulated in mouse DSS compared to health controls
+mouse_up <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/HumanMicrobiome/UpMouseDSS.csv")
+#the below dataframe is what is downregulated in mouse DSS compared to health controls
+mouse_down <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/HumanMicrobiome/DownMouseDSS.csv")
+
+head(human_up)
+head(human_down)
+head(mouse_up)
+head(mouse_down)
+```
+
+```{r fig.width=10}
+#human_down
+human_down_v <- human_down$feature
+# Remove the prefix "g__" and convert to lowercase
+human_down_v <- tolower(gsub("^g__", "", human_down_v))
+
+# View the cleaned vector
+print(human_down_v)
+
+mouse_de <- read.delim("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/1_16_25/DifferentialExpression/GenusLevel/masalin_results_G_refC_c/significant_results.tsv", header = TRUE, sep = "\t")
+mouse_de_DSS <- subset(mouse_de, value == "DSS" & coef < 0)
+mouse_de_DSS
+mouse_down_DSS_v <- tolower(mouse_de_DSS$feature)
+length(mouse_down_DSS_v)
+
+data_list_2 <- list(
+  "Downregulated Taxa: DSS Mice" = mouse_down_DSS_v,
+  "Downregulated Taxa: IBD Humans" = human_down_v
+  
+)
+
+intersect(mouse_down_DSS_v, human_down_v)
+
+# Generate the Venn diagram
+library(ggvenn)
+ggvenn(data_list_2, 
+       names(data_list_2),
+       fill_color = c("green", "pink"),
+       fill_alpha = 0.5,
+       stroke_size = 0.5,
+       text_size = 5,
+       set_name_size = 6) +
+  ggtitle("Overlapping Downregulated Genera Between UC Mice and IBD Humans") + theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5)  # Make title larger and centered
+  )
+
+```
+
+
+```{r}
+library(ggvenn)
+
+# Create a list of taxa from the feature column of both dataframes
+taxa_list <- list(
+  `Human IBD (Top 25 Genera)` = human_up$feature,  # Rename circle for human data
+  `Mouse DSS` = mouse_up$feature   # Rename circle for mouse data
+)
+
+# Generate the Venn diagram
+venn_up_mouse_human <- ggvenn(
+  taxa_list,
+  fill_color = c("skyblue", "pink"),
+  stroke_size = 0.5,
+  set_name_size = 5,
+  text_size = 4
+) +
+  ggtitle("Taxa Overlap Between Significantly Upregulated Genes Between\nHuman IBD and Mouse Colitis") +  # Add title
+  theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5, margin = margin(b = 20)),  # Add bottom margin to title
+    plot.margin = margin(t = 20, r = 20, b = 20, l = 20))  # Customize title appearance
+
+venn_up_mouse_human
+
+ggsave(
+  filename = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/figures/venn_up_mouse_human.jpeg",  # File path
+  plot = venn_up_mouse_human,  # The plot object to save
+  width = 8,         # Width of the image in inches
+  height = 6,        # Height of the image in inches
+  dpi = 300          # Resolution in dots per inch
+)
+
+```
+
+```{r}
+library(ggvenn)
+
+# Create a list of taxa from the feature column of both dataframes
+taxa_list <- list(
+  `Human IBD (Top 25 Genera)` = human_down$feature,  # Rename circle for human data
+  `Mouse DSS` = mouse_down$feature   # Rename circle for mouse data
+)
+
+# Generate the Venn diagram
+venn_down_mouse_human <- ggvenn(
+  taxa_list,
+  fill_color = c("skyblue", "pink"),
+  stroke_size = 0.5,
+  set_name_size = 5,
+  text_size = 4
+) +
+  ggtitle("Taxa Overlap Between Significantly Downregulated Genes Between\nHuman IBD and Mouse Colitis") +  # Add title
+  theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5, margin = margin(b = 20)),  # Add bottom margin to title
+    plot.margin = margin(t = 20, r = 20, b = 20, l = 20))  # Customize title appearance
+
+venn_down_mouse_human
+
+ggsave(
+  filename = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/figures/venn_down_mouse_human.jpeg",  # File path
+  plot = venn_down_mouse_human,  # The plot object to save
+  width = 8,         # Width of the image in inches
+  height = 6,        # Height of the image in inches
+  dpi = 300          # Resolution in dots per inch
+)
+
+```
+
+#VIOLIN PLOT TO VISUALIZE THE READ DISTRIBUTION IN COMMONLY UPREGULATED TAXA BETWEEN MOUSE DSS AND HUMAN IBD
+```{r}
+
+#Commonly Upregulated Taxa:"Klebsiella" --> violin plot didn't look that great
+#Commonly Downregulated Taxa:"Bifidobacterium", "Ruminococcus", "Eubacterium", "Collinsella", "Streptococcus", "Dorea", "Coprococcus", "Erysipelotrichaceae_noname" (Family)
+
+Down_genus_names <- c("Streptococcus", "Dorea", "Coprococcus", "Collinsella", 
+            "Ruminococcus", "Bifidobacterium", "Eubacterium")
+#Down_family_names <- c("Erysipelotrichaceae_noname")
+
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(ggrepel)
+
+bracken_G_relative_c <- bracken_G_c %>%
+  mutate(across(-Sample, ~ .x / sum(.x, na.rm = TRUE), .names = "rel_{.col}")) %>%  # Normalize each column
+  mutate(across(starts_with("rel_"), ~ replace_na(.x, 0)))  %>%      # Replace NAs with 0
+  select(Sample, starts_with("rel_"))                   # Replace NAs with 0
+
+bracken_G_relative_c <- bracken_G_relative_c %>%
+  rename_with(~ gsub("^rel_", "", .), -Sample)
+
+# Filter the genus Klebsiella from the bracken_G dataframe
+Streptococcus_data <- bracken_G_c %>%
+  filter(Sample == "Streptococcus") %>%  # Filter for the genus Klebsiella
+  pivot_longer(
+    cols = -Sample,                  # All columns except 'sample' are sample names
+    names_to = "SampleN",             # Convert sample names to a new column
+    values_to = "Abundance"          # The values represent abundance
+  )
+
+# Merge Klebsiella data with metadata to add treatment group information
+Streptococcus_data <- Streptococcus_data %>%
+  left_join(metadata_DSS13, by = c("SampleN" = "Sample"))
+
+Streptococcus_data
+
+
+# Define custom colors for the treatment groups
+ann_colors <- list(Group = c(
+  "Control" = "#0000ff",
+  "DSS" = "#f96595",
+  "Zn + DSS" = "#07be78",
+  "DSS + ZnO" = "#057e97",
+  "DSS + ZnI" = "#8babd2"
+))
+
+# Create a violin plot
+violin_plot <- ggplot(Streptococcus_data, aes(x = Treatment, y = Abundance, fill = Treatment)) +
+  geom_violin(trim = FALSE, scale = "width", alpha = 0.8) +  # Create violin plot
+  geom_jitter(width = 0.2, size = 1.5, alpha = 0.6) +
+  geom_text_repel(aes(label = SampleN), size = 3, max.overlaps = 20) +  # Add points for data distribution
+  scale_fill_manual(values = ann_colors) +                  # Apply custom colors
+  theme_minimal() +                                         # Use a minimal theme
+  labs(
+    title = "Streptococcus Abundance by Treatment Group",
+    x = "Treatment Group",
+    y = "Abundance",
+    fill = "Group"
+  ) +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 13),
+    legend.position = "none"  # Hide legend as group colors are self-explanatory
+  )
+
+# Print the plot
+print(violin_plot)
+
+ggsave(
+  filename = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/figures/Klebsiella_violin_plot.jpeg",  # File path
+  plot = violin_plot,  # The plot object to save
+  width = 10,         # Width of the image in inches
+  height = 8,        # Height of the image in inches
+  dpi = 300          # Resolution in dots per inch
+)
+
+```
+
+```{r}
+library(tidyverse)
+
+# List of genera to plot
+Down_genus_names <- c("Bifidobacterium", "Ruminococcus", "Eubacterium", 
+                      "Collinsella", "Streptococcus", "Dorea", "Coprococcus")
+
+# Define custom colors for the treatment groups
+ann_colors <- c(
+  "Control" = "#0000ff",
+  "DSS" = "#f96595",
+  "DSS + ZnI" = "#07be78",
+  "DSS + ZnO" = "#057e97",
+  "Zn + DSS" = "#8babd2"
+)
+
+# Function to create and save violin plots for each genus
+create_violin_plot <- function(genus) {
+  # Filter for the current genus
+  genus_data <- bracken_G %>%
+    filter(Sample == genus) %>%  # Filter for the genus
+    pivot_longer(
+      cols = -Sample,            # All columns except 'Sample' are sample names
+      names_to = "SampleN",      # Convert sample names to a new column
+      values_to = "Abundance"    # The values represent abundance
+    ) %>%
+    left_join(metadata_DSS13, by = c("SampleN" = "Sample"))  # Merge with metadata
+  
+  # Create the violin plot
+  plot <- ggplot(genus_data, aes(x = Treatment, y = Abundance, fill = Treatment)) +
+    geom_violin(trim = FALSE, scale = "width", alpha = 0.8) +  # Create violin plot
+    geom_jitter(width = 0.2, size = 1.5, alpha = 0.6) +
+    geom_text_repel(aes(label = SampleN), size = 3, max.overlaps = 20) +  # Add points
+    scale_fill_manual(values = ann_colors) +                  # Apply custom colors
+    theme_minimal() +                                         # Use a minimal theme
+    labs(
+      title = paste(genus, "Abundance by Treatment Group"),
+      x = "Treatment Group",
+      y = "Abundance",
+      fill = "Group"
+    ) +
+    theme(
+      plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 13),
+      legend.position = "none"  # Hide legend
+    )
+  
+  # Save the plot
+  ggsave(
+    filename = paste0("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/figures/", genus, "_violin_plot.jpeg"),
+    plot = plot,
+    width = 10,
+    height = 8,
+    dpi = 300
+  )
+}
+
+# Loop through each genus in the list and create the violin plot
+for (genus in Down_genus_names) {
+  create_violin_plot(genus)
+}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+# Shannon Index Plot with Sample Labels
+Shannon_all_c_labeled <- ggplot(results_with_metadata_c, aes(x = Treatment, y = shannon_index, fill = Treatment)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) + # Avoid overlapping outlier points with labels
+  geom_jitter(aes(label = Sample), width = 0.2, size = 3, alpha = 0.8) + # Jitter points
+  geom_text(aes(label = Sample), position = position_jitter(width = 0.2), vjust = -1, size = 3) + # Label points
+  theme_minimal() +
+  labs(title = "Shannon Index by Group", x = "Treatment", y = "Shannon Index") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = ann_colors)
+
+# Chao1 Index Plot with Sample Labels
+Chao1_all_c_labeled <- ggplot(results_with_metadata_c, aes(x = Treatment, y = chao1_index, fill = Treatment)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) + # Avoid overlapping outlier points with labels
+  geom_jitter(aes(label = Sample), width = 0.2, size = 3, alpha = 0.8) + # Jitter points
+  geom_text(aes(label = Sample), position = position_jitter(width = 0.2), vjust = -1, size = 3) + # Label points
+  theme_minimal() +
+  labs(title = "Chao1 Index by Group", x = "Treatment", y = "Chao1 Index") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = ann_colors)
+
+# Display Plots
+print(Shannon_all_c_labeled)
+print(Chao1_all_c_labeled)
+
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/DiversityPlots/Shannon_all_labeled.jpeg", plot = Shannon_all_c_labeled, width = 8, height = 6, dpi = 300)
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/Gut_DB_1_29_25/figures/DiversityPlots/Chao1_all_labeled.jpeg", plot = Chao1_all_c_labeled, width = 8, height = 6, dpi = 300)
+
+```
+
+
+
+#LDA analysis
+
+```{r}
+library(tidyr)   
+results_with_metadata
+
+long_bracken <- bracken_df %>%
+  pivot_longer(cols = -species_name, names_to = "sample_id", values_to = "read_count") %>%
+  group_by(sample_id)
+
+long_bracken_condensed <- bracken_df_condensed %>%
+  pivot_longer(cols = -species_name, names_to = "sample_id", values_to = "read_count") %>%
+  group_by(sample_id)
+
+colnames(long_bracken)[colnames(long_bracken) == "sample_id"] <- "Sample"
+colnames(long_bracken_condensed)[colnames(long_bracken_condensed) == "sample_id"] <- "Sample"
+
+
+# Merge diversity indices with metadata
+long_bracken <- long_bracken %>%
+  left_join(metadata_DSS13_condensed, by = "Sample")
+
+long_bracken_condensed <- long_bracken_condensed %>%
+  left_join(metadata_DSS13_condensed, by = "Sample")
+
+
+long_bracken
+long_bracken_condensed
+```
+
+```{r}
+library(phyloseq)
+library(microbiomeMarker)
+
+df_wide <- long_bracken %>%
+  pivot_wider(names_from = species_name, values_from = read_count, values_fill = list(read_count = 0))
+df_wide <- as.data.frame(df_wide)
+df_wide <- df_wide[, !(names(df_wide) %in% c("Location", "Sex"))]
+
+row.names(df_wide) <- df_wide$Sample
+df_wide <- df_wide[, -which(names(df_wide) == "Sample")]
+df_wide
+
+species_mapping <- data.frame(
+  Original = colnames(df_wide)[-1],
+  Shortened = paste0("Species_", seq_along(colnames(df_wide)[-1]))
+)
+
+colnames(species_mapping)[colnames(species_mapping) == "Original"] <- "species_name"
+species_mapping
+rownames(species_mapping) <- species_mapping$Shortened
+species_mapping$Shortened <- NULL
+species_mapping #Taxa table for phyloseq
+
+otu_table <- bracken_df
+otu_names <- rownames(species_mapping)
+species_names <- species_mapping$species_name
+otu_table$species_name <- rownames(species_mapping)[match(otu_table$species_name, species_mapping$species_name)]
+
+rownames(otu_table) <- otu_table$species_name
+otu_table <- otu_table[, -which(names(otu_table) == "species_name")]
+
+otu_table #OTU table for phyloseq
+
+metadata_LDA <- metadata_DSS13
+rownames(metadata_LDA) <- metadata_LDA$Sample
+metadata_LDA$Sample <- NULL
+metadata_LDA
+
+# Create phyloseq object
+otu_table <- otu_table(otu_table, taxa_are_rows = FALSE)
+sample_data <- sample_data(metadata_LDA)
+tax_table <- tax_table(species_mapping)
+
+physeq <- phyloseq(otu_table, sample_data, tax_table)
+
+species_mapping
+otu_table
+metadata_LDA
+
+#################
+
+tax_table <- tax_table(as.matrix(species_mapping))
+otu_table <- as.matrix(otu_table)
+
+###############
+constant_vars <- df_wide %>%
+  group_by(Treatment) %>%
+  summarise(across(everything(), ~ sd(.), .names = "sd_{.col}")) %>%
+  summarise(across(starts_with("sd_"), ~ all(. == 0))) %>%
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "is_constant") %>%
+  filter(is_constant) %>%
+  mutate(variable = gsub("sd_", "", variable)) %>%
+  pull(variable)
+
+# Print constant variables
+print(constant_vars)
+
+df_wide_cleaned <- df_wide[, !(names(df_wide) %in% constant_vars)]
+```
+
+```{r}
+
+
+
+
+
+
+tax_table(physeq) <- tax_table(species_mapping)
+
+
+physeq <- phyloseq(otu_table, sample_data, tax_table)
+
+lefse_result <- run_lefse(
+  physeq,
+  group = "Treatment",      # Specify the treatment group column
+  norm = "CPM",             # Normalization method (e.g., Counts Per Million)
+  kw_cutoff = 0.05,         # Kruskal-Wallis p-value cutoff
+  lda_cutoff = 2.0,         # LDA score cutoff
+  multigrp_strat = TRUE     # Consider multi-group strategy
+)
+
+bracken_df
+taxonomy_matrix <- as.matrix(taxonomy_df)
+```
+
+
+```{r}
+missing_in_mapping <- setdiff(rownames(abundance_df_transposed), rownames(species_mapping))
+missing_in_abundance <- setdiff(rownames(species_mapping), rownames(abundance_df_transposed))
+
+missing_in_mapping  # OTUs in abundance_df_transposed but not in species_mapping
+missing_in_abundance 
+
+species_mapping <- species_mapping[rownames(species_mapping) %in% rownames(abundance_df_transposed), ]
+abundance_df_transposed <- abundance_df_transposed[rownames(abundance_df_transposed) %in% rownames(species_mapping), ]
+```
+
+
+
+```{r}
+
+taxa_names(physeq)
+taxa_names(tax_table(physeq))
+taxa_names(otu_table(physeq))
+
+
+taxataxonomy
+bracken_df
+tax_table(physeq)
+```
+
+
+
+
+
+
+```{r}
+#taxa_names(physeq)
+
+rownames(tax_table(physeq)) <- tax_table(physeq)[, "species_name"]
+
+# Ensure OTU table matches the updated taxonomy table
+taxa_names(otu_table(physeq)) <- taxa_names(tax_table(physeq))
+taxa_names(tax_table(physeq))
+taxa_names(otu_table(physeq))
+```
+
+
+
+```{r}
+sample_data(physeq)
+
+# Check the OTU table
+otu_table(physeq)
+
+# Check the taxonomy table
+tax_table(physeq)
+```
+
+

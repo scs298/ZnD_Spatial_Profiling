@@ -1,0 +1,1516 @@
+---
+title: "Metagenomics_IL10_ZnS_ZnA_ZnS"
+output: html_document
+date: "2025-02-21"
+---
+
+#LOAD METADATA
+
+```{r}
+
+metadata_IL10 <- read.table("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_ZnD_ZnA_ZnS_metadata.csv", header = TRUE, sep = ",", stringsAsFactors = FALSE)
+metadata_IL10$Treatment <- as.factor(metadata_IL10$Treatment)
+metadata_IL10$Treatment <- relevel(metadata_IL10$Treatment, ref = "ZnA")
+metadata_IL10
+```
+
+#COMBINED DATA FOR BRACKEN USING SPECIES NAMES AS THE ROW NAMES
+
+```{r}
+
+library(data.table)
+library(dplyr)
+# List of Bracken files
+file_list <- list.files(path = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/braken_outputs/IL10:IL10+Zn/Species_Level/", pattern = "_bracken_output.txt", full.names = TRUE)
+
+# Read each file and process
+bracken_IL10 <- lapply(file_list, function(file) {
+  # Extract sample name from the file name
+  sample_name <- gsub("_bracken_output.txt", "", basename(file))
+  
+  # Read the file and keep necessary columns
+  data <- read.table(file, header = TRUE, sep = "\t") %>%
+    select(name, new_est_reads) %>%
+    rename_with(~ sample_name, .cols = new_est_reads)  # Correct way to rename dynamically
+
+  return(data)
+})
+
+# Merge all data by the "Taxon" column
+combined_bracken_IL10 <- Reduce(function(x, y) merge(x, y, by = "name", all = TRUE), bracken_IL10)
+
+# Replace NA with 0 (if there are missing taxa in some samples)
+combined_bracken_IL10[is.na(combined_bracken_IL10)] <- 0
+
+rownames(combined_bracken_IL10) <- combined_bracken_IL10$name
+combined_bracken_IL10 <- combined_bracken_IL10[, -1]
+
+write.csv(combined_bracken_IL10, "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/combined_data_IL10.csv", row.names = TRUE)
+combined_bracken_IL10 <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/combined_data_IL10.csv", row.names = 1)
+colnames(combined_bracken_IL10) <- gsub("^X", "", colnames(combined_bracken_IL10))
+combined_bracken_IL10
+```
+
+
+#GENERATE A READS BOXPLOT TO IDENTIFY ANY MAJOR CHANGES IN READ NUMBERS BETWEEN GROUPS. BASED ON THE RESULTS BELOW, THERE ARE NO SIGNIFICANT DIFFERENCES BETWEEN OUR TOTAL READS IN THE DIFFERENT TREATMENT GROUPS. THEREFORE, I WILL NOT BE RAREFYING MY READS
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+
+bracken_long <- combined_bracken_IL10 %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Species") %>%
+  pivot_longer(cols = -Species, names_to = "Sample", values_to = "Reads")
+
+# Merge with metadata to get Treatment and Location
+bracken_long <- bracken_long %>%
+  left_join(metadata_IL10, by = c("Sample" = "Sample"))
+
+# Create a combined column for grouping (Treatment + Location)
+bracken_long <- bracken_long %>%
+  mutate(Group = paste(Treatment, Location, sep = " "))
+
+# 🔹 Summarize total reads per sample
+total_reads_per_sample <- bracken_long %>%
+  group_by(Sample, Treatment) %>%
+  summarise(Total_Reads = sum(Reads, na.rm = TRUE), .groups = "drop")
+
+# 🔹 Create the boxplot with pairwise comparisons
+read_dist_IL10 <- ggplot(total_reads_per_sample, aes(x = paste(Treatment, sep = " "), 
+                                   y = Total_Reads, fill = Treatment)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.6) +  # Boxplot without outliers
+  geom_jitter(width = 0.2, size = 2, alpha = 0.8) + # Only 1 dot per sample
+  scale_y_log10() +  # Log scale for better visualization
+  stat_compare_means(method = "wilcox.test", label = "p.signif", 
+                     comparisons = list(
+                       c("Chow", "ZnS"),
+                       c("ZnA", "ZnD"),
+                       c("ZnS", "ZnD")
+                     )) +  # Pairwise comparisons
+  labs(
+    title = "Total Read Counts per Sample by Treatment and Location",
+    x = "Group",
+    y = "Total Reads (log10 scale)",
+    fill = "Treatment"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))
+
+read_dist_IL10
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/figures/read_dist_IL10.png", width = 10, height = 6, dpi = 300)
+
+
+```
+
+
+#MAKE PCA PLOT GRAPHING BRAY CURTIS DISSIMILARITY FOR DIMENSIONALITY REDUCTION
+
+```{r}
+# Load required libraries
+library(ggplot2)
+library(vegan)  # For Bray-Curtis distance
+library(dplyr)  # Data manipulation
+library(janitor) # Cleaning column names
+library(ggrepel) # For sample labels
+
+# 🔹 Merge Bracken data with metadata
+pcoa_input_IL10 <- merge(t(combined_bracken_IL10), metadata_IL10, by.x = "row.names", by.y = "Sample")
+colnames(pcoa_input_IL10)[1] <- "Sample"  # Ensure first column is Sample
+pcoa_input_IL10
+# 🔹 Select only numerical abundance data
+pcoa_numeric_IL10 <- pcoa_input_IL10[, !(colnames(pcoa_input_IL10) %in% c("Sample", "Treatment"))]
+
+# Convert the matrix to character (in case some columns are factors)
+pcoa_numeric_IL10 <- apply(pcoa_numeric_IL10, 2, as.character)
+
+# Trim leading/trailing spaces and convert to numeric
+pcoa_numeric_IL10 <- apply(pcoa_numeric_IL10, 2, function(x) as.numeric(trimws(x)))
+
+# Ensure it is a numeric matrix
+pcoa_numeric_IL10 <- as.matrix(pcoa_numeric_IL10)
+pcoa_numeric_IL10
+# Check that the conversion worked
+str(pcoa_numeric_IL10)  # Should display 'num' type
+
+# Replace NA values with 0 to avoid division errors
+pcoa_numeric_IL10[is.na(pcoa_numeric_IL10)] <- 0
+
+# Compute row sums
+row_sums <- rowSums(pcoa_numeric_IL10)
+
+# Check if there are any zero row sums
+print(sum(row_sums == 0))  # If this prints >0, you have zero-sum rows!
+
+
+# 🔹 Normalize by total reads per sample (relative abundance)
+pcoa_numeric_IL10 <- pcoa_numeric_IL10 / rowSums(pcoa_numeric_IL10)
+pcoa_numeric_IL10
+# 🔹 Compute Bray-Curtis distance matrix
+bray_curtis_dist <- vegdist(pcoa_numeric_IL10, method = "bray")
+
+# 🔹 Perform PCoA (Principal Coordinates Analysis)
+pcoa_result_IL10 <- cmdscale(bray_curtis_dist, k = 2, eig = TRUE)  # Compute eigenvalues
+
+# 🔹 Convert PCoA results into a data frame
+pcoa_scores_IL10 <- as.data.frame(pcoa_result_IL10$points)
+colnames(pcoa_scores_IL10) <- c("PC1", "PC2")
+pcoa_scores_IL10$Sample <- pcoa_input_IL10$Sample
+
+# 🔹 Merge PCoA scores with metadata
+pcoa_scores_IL10 <- merge(pcoa_scores_IL10, metadata_IL10, by = "Sample")
+
+# 🔹 Calculate variance explained
+pc1_variance_IL10 <- round(100 * (pcoa_result_IL10$eig[1] / sum(pcoa_result_IL10$eig)), 1)
+pc2_variance_IL10 <- round(100 * (pcoa_result_IL10$eig[2] / sum(pcoa_result_IL10$eig)), 1)
+
+# 🔹 Print variance explained
+cat("PC1 Variance:", pc1_variance_IL10, "%\n")
+cat("PC2 Variance:", pc2_variance_IL10, "%\n")
+
+# 🔹 Create a new Grouping variable: "ZnD/ZnA" + "Location"
+pcoa_scores_IL10$Group <- paste(pcoa_scores_IL10$Treatment, sep = " ")
+
+# 🔹 Define colors for the 6 groups
+group_colors <- c(
+  "ZnD" = "#E69F00", "ZnA" = "#56B4E9", "ZnS" = "#009E73", "Chow" = "#F0E442")
+
+pcoa_scores_IL10
+# 🔹 PCoA Plot: ZnD/ZnA Groups
+pcoa_plot_IL10 <- ggplot(pcoa_scores_IL10, aes(x = PC1, y = PC2, color = Group, fill = Group)) +
+  geom_point(size = 3, alpha = 0.8) +
+  stat_ellipse(geom = "polygon", alpha = 0.2) +  # Add filled ellipses
+  scale_color_manual(values = group_colors) +
+  scale_fill_manual(values = group_colors) +
+  theme_minimal() +
+  labs(
+    title = "PCoA (Bray-Curtis) - IL10 Groups",
+    x = paste0("PC1 (", pc1_variance_IL10, "%)"),
+    y = paste0("PC2 (", pc2_variance_IL10, "%)"),
+    color = "Group"
+  ) +
+  theme(
+    legend.position = "right",
+    panel.background = element_rect(fill = "white", color = "black"),
+    plot.title = element_text(face = "bold", size = 14),
+    axis.title.x = element_text(face = "bold", size = 12),
+    axis.title.y = element_text(face = "bold", size = 12)
+  )
+
+# 🔹 Save and print the plot
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/figures/pcoa_IL10.png",
+       plot = pcoa_plot_IL10, width = 8, height = 6, dpi = 300)
+pcoa_plot_IL10
+
+```
+
+#DATAFRAME FROM KRAKEN OUTPUT TO CALCULATE THE ABUNDANCE OF BACTERIA, FUNGI, AND VIRUSES ACROSS SAMPLES
+
+```{r}
+library(dplyr)
+
+# Set the folder path
+input_folder <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/kraken_outputs/IL10:IL10+Zn/"
+
+# List all Kraken report files in the folder
+file_list <- list.files(path = input_folder, pattern = "*_report.txt", full.names = TRUE)
+
+# Initialize an empty list to store results
+taxon_counts <- list()
+
+# Loop through each Kraken report file
+for (file in file_list) {
+  
+  # Read the Kraken report file
+  kraken_report <- read.delim(file, header = FALSE, sep = "\t", stringsAsFactors = FALSE)
+  
+  # Rename columns (adjust as needed based on the structure of your file)
+  colnames(kraken_report) <- c("Percent_Reads", "Reads_This_Taxon", "Reads_Clade", "Rank_Code", "Taxonomy_ID", "Taxon_Name")
+  
+  # Filter for taxa of interest
+  filtered_taxa <- kraken_report %>%
+    filter(Taxon_Name %in% c("    Bacteria", "  Viruses", "        Fungi"))
+  
+  # Aggregate counts for each taxon
+  taxon_summary <- filtered_taxa %>%
+    group_by(Taxon_Name) %>%
+    summarize(Read_Count = sum(Reads_This_Taxon), .groups = "drop")
+  
+  # Add the sample name (derived from the filename)
+  taxon_summary$Sample <- gsub("_report.txt", "", basename(file))
+  
+  # Append to the list
+  taxon_counts[[file]] <- taxon_summary
+}
+
+# Combine all results into a single dataframe
+combined_taxon_counts <- bind_rows(taxon_counts)
+
+# Normalize counts by total reads per sample
+# Calculate total reads per sample
+total_reads <- combined_taxon_counts %>%
+  group_by(Sample) %>%
+  summarize(Total_Reads = sum(Read_Count))
+
+# Join total reads with the combined taxon counts
+normalized_taxon_counts <- combined_taxon_counts %>%
+  left_join(total_reads, by = "Sample") %>%
+  mutate(Relative_Abundance = Read_Count / Total_Reads * 100)
+
+transformed_df_PF <- normalized_taxon_counts %>%
+  select(Taxon_Name, Sample, Read_Count) %>% # Keep relevant columns
+  pivot_wider(
+    names_from = Sample,           # Columns become Sample names
+    values_from = Read_Count, # Values are from Relative_Abundance
+    values_fill = 0                # Fill missing values with 0
+  )
+
+transformed_df_PF <- as.data.frame(transformed_df_PF)
+rownames(transformed_df_PF) <- transformed_df_PF$Taxon_Name
+transformed_df_PF <- transformed_df_PF[, -1]
+# Rename columns: replace "-" with "." and remove "_kraken"
+colnames(transformed_df_PF) <- gsub("-", ".", colnames(transformed_df_PF))  # Replace "-" with "."
+colnames(transformed_df_PF) <- gsub("_kraken$", "", colnames(transformed_df_PF))  # Remove "_kraken" at the end
+transformed_df_PF <- transformed_df_PF[, colnames(transformed_df_PF) %in% metadata_IL10$Sample]
+
+
+write.csv(transformed_df_PF, "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/kingdom_classification_IL10.csv", row.names = TRUE)
+
+kingdom_classification_IL10 <- read.csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/kingdom_classification_IL10.csv", row.names = 1)
+kingdom_classification_IL10
+
+colnames(kingdom_classification_IL10) <- gsub("^X", "", colnames(kingdom_classification_IL10))
+rownames(kingdom_classification_IL10)
+
+```
+
+#PLOT SIMPLE RELATIVE ABUNDANCE GRAPH VISUALIZING THE PRESENCE OF BACTERIAL, FUNGAL, AND VIRAL READS
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(ggbreak)  # Import the package for axis breaks
+
+# Convert read counts to relative abundance (%)
+relative_abundance_df <- kingdom_classification_IL10 %>%
+  mutate(across(everything(), ~ . / sum(.) * 100)) %>%
+  tibble::rownames_to_column(var = "Kingdom") %>%
+  pivot_longer(cols = -Kingdom, names_to = "Sample", values_to = "Relative_Abundance")
+
+# Merge with metadata to get treatment groups
+relative_abundance_df <- relative_abundance_df %>%
+  left_join(metadata_ZnD5, by = c("Sample" = "Sample"))
+
+relative_abundance_df
+
+# Create boxplot with a y-axis break
+boxplot_relative_abundance <- ggplot(relative_abundance_df, aes(x = Kingdom, y = Relative_Abundance, fill = Kingdom)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.2, alpha = 0.5) +  # Adds individual points for better visualization
+  scale_fill_manual(values = c("    Bacteria" = "#1f78b4", "        Fungi" = "#6a3d9a", "  Viruses" = "#33a02c")) +
+  theme_minimal() +
+  labs(title = "Relative Abundance of Bacteria, Fungi, and Viruses",
+       x = "Kingdom",
+       y = "Relative Abundance (%)") +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    axis.title.x = element_text(size = 14, face = "bold"),
+    axis.title.y = element_text(size = 14, face = "bold"),
+    axis.text.x = element_text(size = 12, face = "bold"),
+    axis.text.y = element_text(size = 12, face = "bold"),
+    legend.position = "none"
+  ) +
+  scale_y_break(c(3, 95))  # Breaks y-axis between 5 and 90
+
+# Save plot
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/figures/relative_abundance_boxplot_with_break.jpeg",
+       plot = boxplot_relative_abundance, width = 8, height = 6)
+
+# Display plot
+print(boxplot_relative_abundance)
+
+unique(relative_abundance_df$Kingdom)
+
+```
+
+
+#CALCULATE SHANNON DIVERSITY, CHAO1 DIVERSITY, AND OBSERVED SPECIES IN PLUSPF DATABASE
+#Generate phyloseq object and make plots for diversity 
+
+```{r fig.height= 8}
+library(phyloseq)
+library(dplyr)
+library(tidyr)
+
+metadata_IL10_phy <- metadata_IL10
+rownames(metadata_IL10_phy) <- metadata_IL10_phy$Sample
+metadata_IL10_phy <- metadata_IL10_phy[, -which(colnames(metadata_IL10_phy) == "Sample")]
+head(metadata_IL10_phy)
+metadata_IL10_phy <- sample_data(metadata_IL10_phy)
+
+otu_phy_IL10 <- combined_bracken_IL10
+otu_phy_IL10 <- as.matrix(otu_phy_IL10)
+otu_phy_IL10 <- otu_table(otu_phy_IL10, taxa_are_rows = TRUE)
+
+physeq_IL10 <- phyloseq(otu_phy_IL10, metadata_IL10_phy)
+diversity_data_IL10 <- estimate_richness(physeq_IL10, measures = c("Observed", "Shannon", "Chao1"))
+metadata_IL10 <- sample_data(physeq_IL10)  # Extract sample metadata
+diversity_data_IL10 <- cbind(metadata_IL10, diversity_data_IL10)  
+
+```
+
+```{r}
+library(phyloseq)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+
+# Compute Diversity Metrics
+diversity_data_IL10 <- estimate_richness(physeq_IL10, measures = c("Observed", "Shannon", "Chao1"))
+
+# Extract Sample Metadata
+metadata_IL10_df <- as.data.frame(sample_data(physeq_IL10))
+
+# Merge Diversity Data with Metadata
+diversity_data_IL10 <- cbind(metadata_IL10_df, diversity_data_IL10)
+
+custom_colors <- c(
+  "ZnD" = "#E69F00",
+  "ZnA" = "#56B4E9",
+   "ZnS" = "#009E73",
+  "Chow" = "#F0E442"
+)
+
+plot_diversity_metric <- function(metric, y_label, title, subset_location) {
+  
+  # Subset the data for the specific location
+  subset_data <- diversity_data_IL10
+  subset_data$Treatment <- factor(subset_data$Treatment, levels = c("Chow", "ZnS", "ZnA", "ZnD"))
+  
+  ggplot(subset_data, aes(x = Treatment, y = get(metric), fill = Treatment)) +
+    geom_boxplot(alpha = 0.7, outlier.shape = NA) +
+    geom_jitter(width = 0.2, alpha = 0.6, size = 1.5) +  
+    scale_fill_manual(values = custom_colors) +
+    theme_minimal() +
+    labs(title = paste(title, "-"), x = "Treatment Group", y = y_label) +
+    theme(
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+      axis.title.x = element_text(size = 16, face = "bold"),
+      axis.title.y = element_text(size = 16, face = "bold"),
+      axis.text.x = element_text(size = 14, face = "bold", color = "black"),
+      axis.text.y = element_text(size = 14, color = "black")
+    ) +
+    stat_compare_means(method = "kruskal.test", label.y = max(subset_data[[metric]], na.rm = TRUE) * 1.1) +  # Log scale for better visualization
+  stat_compare_means(method = "wilcox.test", label = "p.signif", 
+                     comparisons = list(
+                       c("Chow", "ZnS"),
+                       c("ZnA", "ZnD"),
+                       c("ZnS", "ZnD")
+                     ))   # Pairwise comparisons
+}
+
+# Shannon Diversity
+shannon_IL10 <- plot_diversity_metric("Shannon", "Shannon Diversity Index", "Shannon Diversity")
+
+# Chao1 Index
+chao1_IL10 <- plot_diversity_metric("Chao1", "Chao1 Index", "Chao1 Index", "Cecum")
+
+# Observed Species
+observed_IL10 <- plot_diversity_metric("Observed", "Number of Observed Species", "Observed Species", "cecum")
+
+# Define output directory
+output_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/figures/DiversityPlots/"
+
+# Save all plots
+ggsave(paste0(output_dir, "shannon_cecum.png"), plot = shannon_IL10, width = 8, height = 6, dpi = 300)
+ggsave(paste0(output_dir, "chao1_cecum.png"), plot = chao1_IL10, width = 8, height = 6, dpi = 300)
+ggsave(paste0(output_dir, "observed_cecum.png"), plot = observed_IL10, width = 8, height = 6, dpi = 300)
+
+print(shannon_IL10)
+print(chao1_IL10)
+print(observed_IL10)
+
+```
+
+
+#GENERATE KRAKEN REPORT FILES FOR BACTERIA, FUNGI, AND VIRUSES SEPARATED. THEN I WILL USE THE SPECIES INFORMATION FROM THE PARSED KRAKEN FILES TO SUBSET THE BRACKEN DATA. THEN I WILL CLUSTER THEM IN A PCA PLOT AND MAKE GRAPHS AND DO DIFFERENTIAL EXPRESSION ANALYSIS ON THEM SEPARATELY.
+
+
+```{r}
+# Load necessary library
+library(fs)  # For file handling
+
+# Define input and output directories
+input_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/kraken_outputs/IL10:IL10+Zn/"
+output_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/kraken_output_kingdom_separated/"
+
+# Create output directory if it doesn't exist
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+}
+
+# Function to extract full sections for bacteria, fungi, and viruses
+extract_section <- function(data, keyword) {
+  start_index <- grep(keyword, data)
+  if (length(start_index) == 0) return(character(0))  # Return empty if keyword not found
+  
+  extracted_lines <- c()
+  collecting <- FALSE
+  
+  for (line in data) {
+    if (grepl(keyword, line)) collecting <- TRUE  # Start collecting when we find the keyword
+    if (collecting) extracted_lines <- c(extracted_lines, line)
+    
+    # Stop collecting when a new domain appears (but not in the same category)
+    if (collecting && grepl("D\\t", line) && !grepl(keyword, line)) break
+  }
+  
+  return(extracted_lines)
+}
+
+# Get all Kraken report files (only those that match the expected report pattern)
+kraken_files <- list.files(input_dir, pattern = ".*_report.txt$", full.names = TRUE)
+
+# Loop through each file and process it
+for (file in kraken_files) {
+  # Read the Kraken report file
+  kraken_data <- readLines(file)
+  
+  # Extract full sections for each domain
+  bacteria_lines <- extract_section(kraken_data, "D\\t2\\t")  # Bacteria
+  fungi_lines <- extract_section(kraken_data, "K\\t4751\\t")  # Fungi
+  virus_lines <- extract_section(kraken_data, "D\\t10239\\t")  # Viruses
+
+  # Generate output file names
+  file_name <- basename(file)
+  output_bacteria <- file.path(output_dir, paste0(tools::file_path_sans_ext(file_name), "_bacteria.txt"))
+  output_fungi <- file.path(output_dir, paste0(tools::file_path_sans_ext(file_name), "_fungi.txt"))
+  output_virus <- file.path(output_dir, paste0(tools::file_path_sans_ext(file_name), "_virus.txt"))
+
+  # Write results to files only if data exists
+  if (length(bacteria_lines) > 0) writeLines(bacteria_lines, output_bacteria)
+  if (length(fungi_lines) > 0) writeLines(fungi_lines, output_fungi)
+  if (length(virus_lines) > 0) writeLines(virus_lines, output_virus)
+
+  # Print confirmation message
+  cat("Processed:", file_name, "\n")
+}
+
+cat("All Kraken reports have been processed. Separated files are saved in:\n", output_dir, "\n")
+hi
+```
+
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(readr)
+library(tools)
+
+# Define directories
+bracken_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/braken_outputs/IL10:IL10+Zn/Species_Level"
+kraken_sep_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/kraken_output_kingdom_separated"
+output_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/bracken_output_separated"
+
+# Create output directory if it doesn't exist
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+}
+
+# Function to extract taxonomic IDs from a Kraken-separated report
+extract_tax_ids <- function(kraken_file) {
+  if (!file.exists(kraken_file)) return(character(0))  # Return empty if file does not exist
+  kraken_data <- read_tsv(kraken_file, col_names = FALSE, show_col_types = FALSE)
+  return(unique(kraken_data$X5))  # Extract taxonomic ID column (assumed in column 5)
+}
+
+# Function to subset Bracken output by kingdom
+subset_bracken <- function(bracken_data, tax_ids, output_name) {
+  filtered_data <- bracken_data %>% filter(taxonomy_id %in% tax_ids)
+  write_tsv(filtered_data, output_name)
+}
+
+# Get all Bracken files
+bracken_files <- list.files(bracken_dir, pattern = "_bracken_output.txt$", full.names = TRUE)
+
+# Process each Bracken file
+for (bracken_file in bracken_files) {
+  # Extract the base name by removing "_bracken_output" from the filename
+  base_name <- gsub("_bracken_output", "", tools::file_path_sans_ext(basename(bracken_file)))
+  # Extract base name without extension
+
+  # Define corresponding Kraken-separated files
+  kraken_bacteria_file <- file.path(kraken_sep_dir, paste0(base_name, "_kraken_report_bacteria.txt"))
+  kraken_fungi_file <- file.path(kraken_sep_dir, paste0(base_name, "_kraken_report_fungi.txt"))
+  kraken_virus_file <- file.path(kraken_sep_dir, paste0(base_name, "_kraken_report_virus.txt"))
+
+
+  # Extract taxonomic IDs for each kingdom
+  bacteria_ids <- extract_tax_ids(kraken_bacteria_file)
+  fungi_ids <- extract_tax_ids(kraken_fungi_file)
+  virus_ids <- extract_tax_ids(kraken_virus_file)
+
+  # Read Bracken output file
+  bracken_data <- read_tsv(bracken_file, show_col_types = FALSE)
+
+  # Generate output file paths
+  bacteria_output <- file.path(output_dir, paste0(base_name, "_bacteria.tsv"))
+  fungi_output <- file.path(output_dir, paste0(base_name, "_fungi.tsv"))
+  virus_output <- file.path(output_dir, paste0(base_name, "_virus.tsv"))
+
+  # Filter and save Bracken output for each kingdom
+  if (length(bacteria_ids) > 0) subset_bracken(bracken_data, bacteria_ids, bacteria_output)
+  if (length(fungi_ids) > 0) subset_bracken(bracken_data, fungi_ids, fungi_output)
+  if (length(virus_ids) > 0) subset_bracken(bracken_data, virus_ids, virus_output)
+
+  # Print status message
+  cat("Processed:", bracken_file, "\n")
+}
+
+cat("All Bracken outputs separated by kingdom saved in:", output_dir, "\n")
+```
+
+```{r}
+# Load necessary libraries
+library(data.table)
+library(dplyr)
+
+# Define directories
+bracken_sep_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/bracken_output_separated/"
+output_file_bacteria <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/combined_bacteria.csv"
+output_file_fungi <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/combined_fungi.csv"
+output_file_virus <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/combined_virus.csv"
+
+# Function to process and merge Bracken files by kingdom
+combine_bracken_files <- function(pattern) {
+  # List all files matching the pattern (e.g., "_bacteria.tsv")
+  file_list <- list.files(path = bracken_sep_dir, pattern = pattern, full.names = TRUE)
+
+  # Read each file and extract relevant columns
+  bracken_data <- lapply(file_list, function(file) {
+    sample_name <- gsub(pattern, "", basename(file))  # Extract sample name
+    data <- read.table(file, header = TRUE, sep = "\t") %>%
+      select(name, new_est_reads) %>%
+      rename_with(~ sample_name, .cols = new_est_reads)  # Rename column with sample name
+    return(data)
+  })
+
+  # Merge all data by the "Taxon" column (name)
+  combined_data <- Reduce(function(x, y) merge(x, y, by = "name", all = TRUE), bracken_data)
+
+  # Replace NA with 0 (if there are missing taxa in some samples)
+  combined_data[is.na(combined_data)] <- 0
+
+  # Set row names as taxa names and remove the "name" column
+  rownames(combined_data) <- combined_data$name
+  combined_data <- combined_data[, -1]
+
+  return(combined_data)
+}
+
+# Process and merge files for each kingdom
+combined_bacteria <- combine_bracken_files("_bacteria.tsv")
+combined_fungi <- combine_bracken_files("_fungi.tsv")
+combined_virus <- combine_bracken_files("_virus.tsv")
+
+# Save as CSV
+write.csv(combined_bacteria, output_file_bacteria, row.names = TRUE)
+write.csv(combined_fungi, output_file_fungi, row.names = TRUE)
+write.csv(combined_virus, output_file_virus, row.names = TRUE)
+
+# Read files back to clean column names
+combined_bacteria <- read.csv(output_file_bacteria, row.names = 1)
+combined_fungi <- read.csv(output_file_fungi, row.names = 1)
+combined_virus <- read.csv(output_file_virus, row.names = 1)
+
+# Remove extra "X" added to column names
+colnames(combined_bacteria) <- gsub("^X", "", colnames(combined_bacteria))
+colnames(combined_fungi) <- gsub("^X", "", colnames(combined_fungi))
+colnames(combined_virus) <- gsub("^X", "", colnames(combined_virus))
+
+# Print confirmation
+cat("Combined Bracken data saved:\n",
+    output_file_bacteria, "\n",
+    output_file_fungi, "\n",
+    output_file_virus, "\n")
+
+# Return dataframes
+list(
+  bacteria = combined_bacteria,
+  fungi = combined_fungi,
+  virus = combined_virus
+)
+
+```
+
+
+#GENERATE DIVERSITY PLOTS FROM THE STRATIFIED OUTPUT FOR BACTERIA, FUNGI, AND VIRUSES
+
+```{r}
+
+
+# Load required libraries
+library(ggplot2)
+library(vegan)
+library(dplyr)
+library(janitor)
+library(ggrepel)
+library(phyloseq)
+library(tidyr)
+library(ggpubr)
+
+# Define directories
+data_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj"
+figures_dir <- file.path(data_dir, "figures")
+pcoa_fig_dir <- file.path(figures_dir, "PCA")
+diversity_fig_dir <- file.path(figures_dir, "DiversityPlots")
+
+# Load metadata
+metadata <- metadata_IL10
+rownames(metadata) <- metadata$Sample 
+
+
+compute_diversity <- function(data, kingdom) {
+  # **Check and Fix Sample Names**
+  sample_names_data <- colnames(data)  # Extract sample names from Bracken data
+  sample_names_metadata <- metadata$Sample  # Extract sample names from metadata
+
+  # Find mismatches
+  mismatched_samples <- setdiff(sample_names_data, sample_names_metadata)
+  if (length(mismatched_samples) > 0) {
+    stop("Error: Mismatched sample names found. Check and rename metadata sample names.")
+  }
+
+  # Convert data into a numeric matrix
+  data_matrix <- as.matrix(data)  # Keep taxa as rows, samples as columns
+  mode(data_matrix) <- "numeric"  # Ensure numeric conversion
+
+  # Ensure metadata row names match Bracken sample names
+  rownames(metadata) <- metadata$Sample
+  metadata_phy <- sample_data(metadata)  # Convert metadata to phyloseq object
+
+  # Convert OTU table into a `phyloseq` format
+  otu_table_phy <- otu_table(data_matrix, taxa_are_rows = TRUE)
+  physeq <- phyloseq(otu_table_phy, metadata_phy)
+
+  # Check if sample names match
+  if (!all(sample_names(metadata_phy) %in% sample_names(otu_table_phy))) {
+    stop("Error: Sample names in metadata do not match sample names in OTU table.")
+  }
+
+  # Compute diversity metrics
+  diversity_data <- estimate_richness(physeq, measures = c("Observed", "Shannon", "Chao1"))
+  diversity_data <- cbind(metadata, diversity_data)
+  
+
+  # **Define function to plot diversity metrics**
+  plot_diversity_metric <- function(metric, y_label, title) {
+    ggplot(diversity_data, aes(x = Treatment, y = get(metric), fill = Treatment)) +
+      geom_boxplot(alpha = 0.7, outlier.shape = NA) +
+      scale_fill_manual(values = custom_colors) +
+      geom_jitter(width = 0.2, alpha = 0.6, size = 1.5) +
+      theme_minimal() +
+      labs(title = title, x = "Treatment Group", y = y_label) +
+      theme(
+        plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+        axis.title.x = element_text(size = 16, face = "bold"),
+        axis.title.y = element_text(size = 16, face = "bold"),
+        axis.text.x = element_text(size = 14, face = "bold", color = "black"),
+        axis.text.y = element_text(size = 14, color = "black")
+      ) +
+      stat_compare_means(method = "kruskal.test")  # Kruskal-Wallis test
+  }
+
+  # Generate plots
+  shannon_plot <- plot_diversity_metric("Shannon", "Shannon Diversity Index", paste("Shannon Diversity -", kingdom))
+  chao1_plot <- plot_diversity_metric("Chao1", "Chao1 Index", paste("Chao1 Index -", kingdom))
+  observed_plot <- plot_diversity_metric("Observed", "Number of Observed Species", paste("Observed Species -", kingdom))
+
+  # Save plots
+  ggsave(file.path(diversity_fig_dir, paste0("shannon_", kingdom, ".png")), plot = shannon_plot, width = 8, height = 6, dpi = 300)
+  ggsave(file.path(diversity_fig_dir, paste0("chao1_", kingdom, ".png")), plot = chao1_plot, width = 8, height = 6, dpi = 300)
+  ggsave(file.path(diversity_fig_dir, paste0("observed_", kingdom, ".png")), plot = observed_plot, width = 8, height = 6, dpi = 300)
+
+  return(list(shannon_plot, chao1_plot, observed_plot))
+}
+
+# Compute and plot diversity for each dataset
+diversity_bacteria <- compute_diversity(combined_bacteria, "Bacteria")
+diversity_fungi <- compute_diversity(combined_fungi, "Fungi")
+diversity_virus <- compute_diversity(combined_virus, "Virus")
+
+# Print plots
+print(diversity_bacteria)
+print(diversity_fungi)
+print(diversity_virus)
+
+```
+
+
+#CREATE BRAY-CURTIS PCOA PLOTS OF THE BACTERIA, VIRAL, AND FUNGAL SUBSET READS FROM THE PLUSPF DATABASE
+```{r}
+# Load required libraries
+library(ggplot2)
+library(vegan)
+library(dplyr)  # For data manipulation
+library(janitor) # Clean column names
+library(ggrepel) # For sample labels
+
+combined_bacteria_transposed_PF <- as.data.frame(t(combined_bacteria))
+combined_bacteria_transposed_PF$Sample <- rownames(combined_bacteria_transposed_PF)
+rownames(combined_bacteria_transposed_PF) <- NULL
+combined_bacteria_transposed_PF <- combined_bacteria_transposed_PF[, c("Sample", setdiff(colnames(combined_bacteria_transposed_PF), "Sample"))]
+
+metadata_IL10$Sample <- rownames(metadata_IL10)  
+
+pcoa_input_bacteria_PF <- merge(combined_bacteria_transposed_PF, metadata_IL10, by = "Sample")
+pcoa_numeric_bacteria_PF <- pcoa_input_bacteria_PF[, !(colnames(pcoa_input_bacteria_PF) %in% c("Sample", "Treatment", "Sex"))]
+pcoa_numeric_bacteria_PF <- pcoa_numeric_bacteria_PF %>% clean_names()
+pcoa_numeric_bacteria_PF <- as.matrix(pcoa_numeric_bacteria_PF)
+pcoa_numeric_bacteria_PF <- pcoa_numeric_bacteria_PF / rowSums(pcoa_numeric_bacteria_PF)
+bray_curtis_dist_bacteria <- vegdist(pcoa_numeric_bacteria_PF, method="bray")
+
+
+
+pcoa_result_bacteria_PF <- cmdscale(bray_curtis_dist_bacteria, k=2, eig=TRUE)  # Compute eigenvalues
+pcoa_scores_bacteria_PF <- as.data.frame(pcoa_result_bacteria_PF$points)
+colnames(pcoa_scores_bacteria_PF) <- c("PC1", "PC2")
+pcoa_scores_bacteria_PF$Sample <- combined_bacteria_transosed_PF$Sample
+pcoa_scores_bacteria_PF <- merge(pcoa_scores_bacteria_PF, metadata_IL10, by = "Sample")
+
+# Calculate variance explained
+pc1_variance_bacteria_PF <- round(100 * (pcoa_result_bacteria_PF$eig[1] / sum(pcoa_result_bacteria_PF$eig)), 1)
+pc2_variance_bacteria_PF <- round(100 * (pcoa_result_bacteria_PF$eig[2] / sum(pcoa_result_bacteria_PF$eig)), 1)
+
+# Print variance explained
+cat("PC1 Variance:", pc1_variance_bacteria_PF, "%\n")
+cat("PC2 Variance:", pc2_variance_bacteria_PF, "%\n")
+
+
+# Define colors for Treatment groups
+ann_colors <- list(Group = c(
+  "ZnD" = "#E69F00",
+  "ZnA" = "#56B4E9",
+   "ZnS" = "#009E73",
+  "Chow" = "#F0E442"
+))
+
+
+# PCoA Plot: Treatment
+pcoa_treatment_bacteria_PF <- ggplot(pcoa_scores_bacteria_PF, aes(x = PC1, y = PC2, color = Treatment, fill = Treatment)) +
+  geom_point(size = 3, alpha = 0.8) +
+  stat_ellipse(geom = "polygon", alpha = 0.2) +  # Add filled ellipses
+  scale_color_manual(values = ann_colors$Group) +
+  scale_fill_manual(values = ann_colors$Group) +
+  #geom_text_repel(aes(label = Sample), size = 3, max.overlaps = 15) +  # Add sample labels
+  theme_minimal() +
+  labs(
+    title = "PCoA Bacteria: Treatment (Bray-Curtis)",
+    x = paste0("PC1 (", pc1_variance_bacteria_PF, "%)"),
+    y = paste0("PC2 (", pc2_variance_bacteria_PF, "%)"),
+    color = "Treatment"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    panel.background = element_rect(fill = "white", color = "black"),
+    plot.title = element_text(face = "bold", size = 14),  # Bold title
+    axis.title.x = element_text(face = "bold", size = 12),  # Bold x-axis label
+    axis.title.y = element_text(face = "bold", size = 12)   # Bold y-axis label
+  )
+  theme(legend.position = "right", panel.background = element_rect(fill = "white", color = "black"))
+
+# Save and print plot
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/figures/PCA/pcoa_treatment_Bacteria_PF.jpeg", plot = pcoa_treatment_bacteria_PF, width = 8, height = 6, dpi = 300)
+pcoa_treatment_bacteria_PF
+```
+
+```{r}
+# PCoA for Fungi
+combined_fungi_transposed_PF <- as.data.frame(t(combined_fungi))
+combined_fungi_transposed_PF$Sample <- rownames(combined_fungi_transposed_PF)
+rownames(combined_fungi_transposed_PF) <- NULL
+combined_fungi_transposed_PF <- combined_fungi_transposed_PF[, c("Sample", setdiff(colnames(combined_fungi_transposed_PF), "Sample"))]
+pcoa_input_fungi_PF <- merge(combined_fungi_transposed_PF, metadata_DSS13_c, by = "Sample")
+
+pcoa_numeric_fungi_PF <- pcoa_input_fungi_PF[, !(colnames(pcoa_input_fungi_PF) %in% c("Sample", "Treatment", "Sex", "Cage", "Location"))]
+pcoa_numeric_fungi_PF <- pcoa_numeric_fungi_PF %>% clean_names()
+pcoa_numeric_fungi_PF <- as.matrix(pcoa_numeric_fungi_PF)
+pcoa_numeric_fungi_PF <- pcoa_numeric_fungi_PF / rowSums(pcoa_numeric_fungi_PF)
+
+bray_curtis_dist_fungi <- vegdist(pcoa_numeric_fungi_PF, method="bray")
+pcoa_result_fungi_PF <- cmdscale(bray_curtis_dist_fungi, k=2, eig=TRUE)  # Compute eigenvalues
+
+pcoa_scores_fungi_PF <- as.data.frame(pcoa_result_fungi_PF$points)
+colnames(pcoa_scores_fungi_PF) <- c("PC1", "PC2")
+pcoa_scores_fungi_PF$Sample <- combined_fungi_transposed_PF$Sample
+pcoa_scores_fungi_PF <- merge(pcoa_scores_fungi_PF, metadata_DSS13_c, by = "Sample")
+
+# Calculate variance explained
+pc1_variance_fungi_PF <- round(100 * (pcoa_result_fungi_PF$eig[1] / sum(pcoa_result_fungi_PF$eig)), 1)
+pc2_variance_fungi_PF <- round(100 * (pcoa_result_fungi_PF$eig[2] / sum(pcoa_result_fungi_PF$eig)), 1)
+
+# PCoA Plot for Fungi
+pcoa_treatment_fungi_PF <- ggplot(pcoa_scores_fungi_PF, aes(x = PC1, y = PC2, color = Treatment, fill = Treatment)) +
+  geom_point(size = 3, alpha = 0.8) +
+  stat_ellipse(geom = "polygon", alpha = 0.2) +
+  scale_color_manual(values = ann_colors$Group) +
+  scale_fill_manual(values = ann_colors$Group) +
+  theme_minimal() +
+  labs(
+    title = "PCoA Fungi: Treatment (Bray-Curtis)",
+    x = paste0("PC1 (", pc1_variance_fungi_PF, "%)"),
+    y = paste0("PC2 (", pc2_variance_fungi_PF, "%)"),
+    color = "Treatment"
+  ) +
+  theme(
+    legend.position = "right",
+    plot.title = element_text(face = "bold", size = 14),
+    axis.title.x = element_text(face = "bold", size = 12),
+    axis.title.y = element_text(face = "bold", size = 12)
+  )
+
+# Save and print plot
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/1_16_25/figures/PCA/pcoa_treatment_Fungi_PF.jpeg",
+       plot = pcoa_treatment_fungi_PF, width = 8, height = 6, dpi = 300)
+
+pcoa_treatment_fungi_PF
+
+```
+
+```{r}
+# PCoA for Virus
+combined_virus_transposed_PF <- as.data.frame(t(combined_virus))
+combined_virus_transposed_PF$Sample <- rownames(combined_virus_transposed_PF)
+rownames(combined_virus_transposed_PF) <- NULL
+combined_virus_transposed_PF <- combined_virus_transposed_PF[, c("Sample", setdiff(colnames(combined_virus_transposed_PF), "Sample"))]
+pcoa_input_virus_PF <- merge(combined_virus_transposed_PF, metadata_DSS13_c, by = "Sample")
+
+pcoa_numeric_virus_PF <- pcoa_input_virus_PF[, !(colnames(pcoa_input_virus_PF) %in% c("Sample", "Treatment", "Sex", "Cage", "Location"))]
+pcoa_numeric_virus_PF <- pcoa_numeric_virus_PF %>% clean_names()
+pcoa_numeric_virus_PF <- as.matrix(pcoa_numeric_virus_PF)
+pcoa_numeric_virus_PF <- pcoa_numeric_virus_PF / rowSums(pcoa_numeric_virus_PF)
+
+bray_curtis_dist_virus <- vegdist(pcoa_numeric_virus_PF, method="bray")
+pcoa_result_virus_PF <- cmdscale(bray_curtis_dist_virus, k=2, eig=TRUE)  # Compute eigenvalues
+
+pcoa_scores_virus_PF <- as.data.frame(pcoa_result_virus_PF$points)
+colnames(pcoa_scores_virus_PF) <- c("PC1", "PC2")
+pcoa_scores_virus_PF$Sample <- combined_virus_transposed_PF$Sample
+pcoa_scores_virus_PF <- merge(pcoa_scores_virus_PF, metadata_DSS13_c, by = "Sample")
+
+# Calculate variance explained
+pc1_variance_virus_PF <- round(100 * (pcoa_result_virus_PF$eig[1] / sum(pcoa_result_virus_PF$eig)), 1)
+pc2_variance_virus_PF <- round(100 * (pcoa_result_virus_PF$eig[2] / sum(pcoa_result_virus_PF$eig)), 1)
+
+# PCoA Plot for Virus
+pcoa_treatment_virus_PF <- ggplot(pcoa_scores_virus_PF, aes(x = PC1, y = PC2, color = Treatment, fill = Treatment)) +
+  geom_point(size = 3, alpha = 0.8) +
+  stat_ellipse(geom = "polygon", alpha = 0.2) +
+  scale_color_manual(values = ann_colors$Group) +
+  scale_fill_manual(values = ann_colors$Group) +
+  theme_minimal() +
+  labs(
+    title = "PCoA Virus: Treatment (Bray-Curtis)",
+    x = paste0("PC1 (", pc1_variance_virus_PF, "%)"),
+    y = paste0("PC2 (", pc2_variance_virus_PF, "%)"),
+    color = "Treatment"
+  ) +
+  theme(
+    legend.position = "right",
+    plot.title = element_text(face = "bold", size = 14),
+    axis.title.x = element_text(face = "bold", size = 12),
+    axis.title.y = element_text(face = "bold", size = 12)
+  )
+
+# Save and print plot
+ggsave("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics_DSS13/1_16_25/figures/PCA/pcoa_treatment_Virus_PF.jpeg",
+       plot = pcoa_treatment_virus_PF, width = 8, height = 6, dpi = 300)
+
+
+
+```
+
+#DIFFERENTIAL EXPRESSION ANALYSIS USING Maaslin2 FOR ALL TAXONOMIC LEVELS, SEPARATED BY BACTERIA, FUNGI, AND VIRUSES
+
+```{r}
+library(phyloseq)
+library(data.table)
+library(readr)
+library(tibble)
+library(dplyr)
+
+# Load Data
+combined_bacteria_S <- read_csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/combined_bacteria.csv", col_names = TRUE) %>% 
+  column_to_rownames(var = colnames(.)[1]) %>%
+  rename_with(~ gsub("_report", "", .))
+colnames(combined_bacteria_S) <- gsub("-", ".", colnames(combined_bacteria_S))
+
+combined_virus_S <- read_csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/combined_virus.csv", col_names = TRUE) %>% 
+  column_to_rownames(var = colnames(.)[1]) %>%
+  rename_with(~ gsub("_report", "", .))
+colnames(combined_virus_S) <- gsub("-", ".", colnames(combined_virus_S))
+
+combined_fungi_S <- read_csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/combined_fungi.csv", col_names = TRUE) %>% 
+  column_to_rownames(var = colnames(.)[1]) %>%
+  rename_with(~ gsub("_report", "", .))
+colnames(combined_fungi_S) <- gsub("-", ".", colnames(combined_fungi_S))
+
+# Load Metadata
+metadata_phy_IL10 <- metadata_IL10
+rownames(metadata_phy_IL10) <- metadata_phy_IL10$Sample
+#metadata_phy_IL10$Treatment <- factor(metadata_phy_IL10$Treatment, levels = c("ZnA", "Chow", "ZnD", "ZnS"))
+
+# 🔹 **Filter Metadata for Chow vs. ZnS**
+metadata_chow_vs_zns <- metadata_phy_IL10 %>% filter(Treatment %in% c("Chow", "ZnS"))
+metadata_chow_vs_zns$Treatment <- factor(metadata_chow_vs_zns$Treatment, levels = c("Chow", "ZnS"))
+metadata_zna_vs_znd <- metadata_phy_IL10 %>% filter(Treatment %in% c("ZnA", "ZnD"))
+metadata_zna_vs_znd$Treatment <- factor(metadata_zna_vs_znd$Treatment, levels = c("ZnA", "ZnD"))
+
+# 🔹 **Filter Count Tables for Chow vs. ZnS**
+bacteria_chow_vs_zns <- combined_bacteria_S[, colnames(combined_bacteria_S) %in% metadata_chow_vs_zns$Sample]
+fungi_chow_vs_zns <- combined_fungi_S[, colnames(combined_fungi_S) %in% metadata_chow_vs_zns$Sample]
+virus_chow_vs_zns <- combined_virus_S[, colnames(combined_virus_S) %in% metadata_chow_vs_zns$Sample]
+
+# 🔹 **Filter Count Tables for ZnA vs. ZnD**
+bacteria_zna_vs_znd <- combined_bacteria_S[, colnames(combined_bacteria_S) %in% metadata_zna_vs_znd$Sample]
+fungi_zna_vs_znd <- combined_fungi_S[, colnames(combined_fungi_S) %in% metadata_zna_vs_znd$Sample]
+virus_zna_vs_znd <- combined_virus_S[, colnames(combined_virus_S) %in% metadata_zna_vs_znd$Sample]
+
+# Convert Metadata to `phyloseq` format
+#metadata_chow_vs_zns <- sample_data(metadata_chow_vs_zns)
+#metadata_zna_vs_znd <- sample_data(metadata_zna_vs_znd)
+
+# **Create Phyloseq Objects**
+physeq_bacteria_chow_vs_zns <- phyloseq(otu_table(bacteria_chow_vs_zns, taxa_are_rows = TRUE), metadata_chow_vs_zns)
+physeq_fungi_chow_vs_zns <- phyloseq(otu_table(fungi_chow_vs_zns, taxa_are_rows = TRUE), metadata_chow_vs_zns)
+physeq_virus_chow_vs_zns <- phyloseq(otu_table(virus_chow_vs_zns, taxa_are_rows = TRUE), metadata_chow_vs_zns)
+
+physeq_bacteria_zna_vs_znd <- phyloseq(otu_table(bacteria_zna_vs_znd, taxa_are_rows = TRUE), metadata_zna_vs_znd)
+physeq_fungi_zna_vs_znd <- phyloseq(otu_table(fungi_zna_vs_znd, taxa_are_rows = TRUE), metadata_zna_vs_znd)
+physeq_virus_zna_vs_znd <- phyloseq(otu_table(virus_zna_vs_znd, taxa_are_rows = TRUE), metadata_zna_vs_znd)
+
+```
+
+```{r}
+library(phyloseq)
+library(data.table)
+library(readr)
+library(tibble)
+
+combined_bacteria_S <- read_csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/combined_bacteria.csv", col_names = TRUE) %>% 
+  column_to_rownames(var = colnames(.)[1]) %>%
+  rename_with(~ gsub("_report", "", .))
+colnames(combined_bacteria_S) <- gsub("-", ".", colnames(combined_bacteria_S))
+
+combined_virus_S <- read_csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/combined_virus.csv", col_names = TRUE) %>% 
+  column_to_rownames(var = colnames(.)[1]) %>%
+  rename_with(~ gsub("_report", "", .))
+colnames(combined_virus_S) <- gsub("-", ".", colnames(combined_virus_S))
+
+combined_fungi_S <- read_csv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/combined_fungi.csv", col_names = TRUE) %>% 
+  column_to_rownames(var = colnames(.)[1]) %>%
+  rename_with(~ gsub("_report", "", .))
+colnames(combined_fungi_S) <- gsub("-", ".", colnames(combined_fungi_S))
+
+combined_bacteria_S
+metadata_IL10
+combined_virus_S
+combined_fungi_S
+
+metadata_phy_IL10 <- metadata_IL10
+rownames(metadata_phy_IL10) <- metadata_IL10$Sample
+metadata_phy_IL10$Treatment <- factor(metadata_phy_IL10$Treatment, levels = c("ZnA", "Chow", "ZnD", "ZnS"))
+
+physeq_ref_control_bacteria <- phyloseq(
+  otu_table(combined_bacteria_S, taxa_are_rows = TRUE),  # Taxa abundance matrix
+  sample_data(metadata_phy_IL10)                        # Metadata
+)
+physeq_ref_control_fungi <- phyloseq(
+  otu_table(combined_fungi_S, taxa_are_rows = TRUE),  # Taxa abundance matrix
+  sample_data(metadata_phy_IL10)                        # Metadata
+)
+physeq_ref_control_virus <- phyloseq(
+  otu_table(combined_virus_S, taxa_are_rows = TRUE),  # Taxa abundance matrix
+  sample_data(metadata_phy_IL10)                        # Metadata
+)
+
+```
+
+
+#DIFFERENTIAL EXPRESSION FOR BACTERIA FUNGI AND VIRUSES (NOT SEPARATED BY LOCATION)
+
+```{r}
+library(Maaslin2)
+
+# **Transform Count Data**
+bacteria_chow_vs_zns_transposed <- t(bacteria_chow_vs_zns)
+bacteria_chow_vs_zns_transposed <- as.matrix(bacteria_chow_vs_zns_transposed)
+mode(bacteria_chow_vs_zns_transposed) <- "numeric"
+bacteria_chow_vs_zns_transposed <- as.data.frame(bacteria_chow_vs_zns_transposed)
+#bacteria_chow_vs_zns_transposed <- as.data.frame(bacteria_chow_vs_zns_transposed)
+
+
+
+bacteria_zna_vs_znd_transposed <- as.data.frame(t(bacteria_zna_vs_znd))
+
+fungi_chow_vs_zns_transposed <- as.data.frame(t(fungi_chow_vs_zns))
+fungi_zna_vs_znd_transposed <- as.data.frame(t(fungi_zna_vs_znd))
+
+virus_chow_vs_zns_transposed <- as.data.frame(t(virus_chow_vs_zns))
+virus_zna_vs_znd_transposed <- as.data.frame(t(virus_zna_vs_znd))
+metadata_chow_vs_zns <- as.data.frame(metadata_chow_vs_zns)
+
+# **Run Maaslin2 for Chow vs. ZnS**
+masalin_results_bacteria_chow_vs_zns <- Maaslin2(
+  bacteria_chow_vs_zns_transposed,
+  metadata_chow_vs_zns,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/DifferentialExpression/masalin_results_bacteria_chow_vs_zns", 
+  min_prevalence = 0.05,
+  fixed_effects = c("Treatment")
+)
+
+masalin_results_fungi_chow_vs_zns <- Maaslin2(
+  fungi_chow_vs_zns_transposed,
+  metadata_chow_vs_zns,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/DifferentialExpression/masalin_results_fungi_chow_vs_zns", 
+  fixed_effects = c("Treatment")
+)
+
+masalin_results_virus_chow_vs_zns <- Maaslin2(
+  virus_chow_vs_zns_transposed,
+  metadata_chow_vs_zns,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/DifferentialExpression/masalin_results_virus_chow_vs_zns", 
+  fixed_effects = c("Treatment")
+)
+
+# **Run Maaslin2 for ZnA vs. ZnD**
+masalin_results_bacteria_zna_vs_znd <- Maaslin2(
+  bacteria_zna_vs_znd_transposed,
+  metadata_zna_vs_znd,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/DifferentialExpression/masalin_results_bacteria_zna_vs_znd", 
+  min_prevalence = 0.05,
+  fixed_effects = c("Treatment")
+)
+
+masalin_results_fungi_zna_vs_znd <- Maaslin2(
+  fungi_zna_vs_znd_transposed,
+  metadata_zna_vs_znd,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/DifferentialExpression/masalin_results_fungi_zna_vs_znd", 
+  fixed_effects = c("Treatment")
+)
+
+masalin_results_virus_zna_vs_znd <- Maaslin2(
+  virus_zna_vs_znd_transposed,
+  metadata_zna_vs_znd,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/DifferentialExpression/masalin_results_virus_zna_vs_znd", 
+  fixed_effects = c("Treatment")
+)
+
+```
+```{r}
+str(bacteria_chow_vs_zns_transposed)
+str(metadata_chow_vs_zns)
+str(bacteria_transposed)
+str(metadata_phy_IL10)
+```
+
+
+
+
+
+
+
+```{r}
+library(Maaslin2)
+
+combined_virus_S
+as.data.frame(t(combined_virus_S))
+
+virus_transposed
+metadata_phy_ZnD5
+
+#INPUT FOR VIRUSES
+virus_transposed <- t(combined_virus_S)
+#colnames(virus_transposed) <- paste0("T", seq_len(ncol(virus_transposed)))
+virus_transposed <- as.matrix(virus_transposed)
+mode(virus_transposed) <- "numeric"
+virus_transposed <- as.data.frame(virus_transposed)
+
+#INPUT FOR BACTERIA
+bacteria_transposed <- t(combined_bacteria_S)
+#colnames(virus_transposed) <- paste0("T", seq_len(ncol(virus_transposed)))
+#bacteria_transposed <- as.matrix(bacteria_transposed)
+#mode(bacteria_transposed) <- "numeric"
+bacteria_transposed <- as.data.frame(bacteria_transposed)
+
+#INPUT FOR FUNGI 
+fungi_transposed <- t(combined_fungi_S)
+fungi_transposed <- as.matrix(fungi_transposed)
+#colnames(fungi_transposed) <- paste0("T", seq_len(ncol(fungi_transposed)))
+mode(fungi_transposed) <- "numeric"
+fungi_transposed <- as.data.frame(fungi_transposed)
+
+# 3️⃣ Run Maaslin2 with the fixed dataset
+masalin_results_bacteria_S <- Maaslin2(
+  bacteria_transposed,
+  metadata_phy_IL10,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/DifferentialExpression/masalin_results_bacteria_S", 
+  min_prevalence = 0.05,
+  fixed_effects = c("Treatment")
+)
+
+masalin_results_fungi_S <- Maaslin2(
+  fungi_transposed,
+  metadata_phy_IL10,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/DifferentialExpression/masalin_results_fungi_S", 
+  fixed_effects = c("Treatment")
+)
+
+masalin_results_virus_S <- Maaslin2(
+  virus_transposed,
+  metadata_phy_IL10,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/DifferentialExpression/masalin_results_virus_S", 
+  fixed_effects = c("Treatment")
+)
+
+metadata_phy_IL10
+metadata_IL10
+```
+
+#DIFFERENTIAL EXPRESSION SEPARATED BY COLON, INTESTNE, AND CECUM AND BACTERIA/FUNGI/VIRUSES
+```{r}
+# Load Maaslin2
+library(Maaslin2)
+library(dplyr)
+
+# 1️⃣ **Filter metadata for each location**
+metadata_colon <- metadata_phy_ZnD5 %>% filter(Location == "colon")
+metadata_intestine <- metadata_phy_ZnD5 %>% filter(Location == "intestine")
+metadata_cecum <- metadata_phy_ZnD5 %>% filter(Location == "cecum")
+
+# 2️⃣ **Subset expression data to match metadata for each location**
+filter_data_by_location <- function(data, metadata) {
+  data_filtered <- data[rownames(data) %in% metadata$Sample, ]
+  return(data_filtered)
+}
+
+# **Filter Bacteria**
+bacteria_colon <- filter_data_by_location(bacteria_transposed, metadata_colon)
+bacteria_intestine <- filter_data_by_location(bacteria_transposed, metadata_intestine)
+bacteria_cecum <- filter_data_by_location(bacteria_transposed, metadata_cecum)
+
+# **Filter Fungi**
+fungi_colon <- filter_data_by_location(fungi_transposed, metadata_colon)
+fungi_intestine <- filter_data_by_location(fungi_transposed, metadata_intestine)
+fungi_cecum <- filter_data_by_location(fungi_transposed, metadata_cecum)
+
+# **Filter Virus**
+virus_colon <- filter_data_by_location(virus_transposed, metadata_colon)
+virus_intestine <- filter_data_by_location(virus_transposed, metadata_intestine)
+virus_cecum <- filter_data_by_location(virus_transposed, metadata_cecum)
+
+# 3️⃣ **Run Maaslin2 for Each Intestinal Site**
+run_maaslin2 <- function(data, metadata, output_dir, label) {
+  Maaslin2(
+    input_data = data,
+    input_metadata = metadata,
+    output = paste0(output_dir, "_", label),
+    min_prevalence = 0.05,
+    fixed_effects = c("Treatment")
+  )
+}
+
+# **Define output directory**
+output_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/DifferentialExpression"
+
+# **Run Maaslin2 for Bacteria**
+run_maaslin2(bacteria_colon, metadata_colon, output_dir, "bacteria_colon")
+run_maaslin2(bacteria_intestine, metadata_intestine, output_dir, "bacteria_intestine")
+run_maaslin2(bacteria_cecum, metadata_cecum, output_dir, "bacteria_cecum")
+
+# **Run Maaslin2 for Fungi**
+run_maaslin2(fungi_colon, metadata_colon, output_dir, "fungi_colon")
+run_maaslin2(fungi_intestine, metadata_intestine, output_dir, "fungi_intestine")
+run_maaslin2(fungi_cecum, metadata_cecum, output_dir, "fungi_cecum")
+
+# **Run Maaslin2 for Virus**
+run_maaslin2(virus_colon, metadata_colon, output_dir, "virus_colon")
+run_maaslin2(virus_intestine, metadata_intestine, output_dir, "virus_intestine")
+run_maaslin2(virus_cecum, metadata_cecum, output_dir, "virus_cecum")
+
+
+```
+
+#GENERATE HEATMAPS FOR BACTERIA, FUNGI, AND VIRUSES, SEPARATED BY LOCATION SELECTING THE TOP 30 MOST SIGNIFICANT DIFFERENTIALLY EXPRESSED TAXA FROM MAASLIN2
+
+```{r}
+# Load required libraries
+library(ggplot2)
+library(ComplexHeatmap)
+library(dplyr)
+library(tidyr)
+library(RColorBrewer)
+
+# Define input paths
+base_path <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/DifferentialExpression/"
+
+# Define output path for heatmaps
+heatmap_output_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/IL10_Proj/figures/Heatmaps"
+if (!dir.exists(heatmap_output_dir)) dir.create(heatmap_output_dir, recursive = TRUE)
+
+# Load metadata
+metadata <- metadata_IL10_phy
+
+# Function to filter data by location
+filter_data_by_location <- function(data, location) {
+  # Identify samples belonging to the specified location
+  location_samples <- metadata$Sample[metadata$Location == location]
+  # Subset data based on location-specific samples
+  data_subset <- data[, colnames(data) %in% location_samples]
+  return(data_subset)
+}
+
+# Function to generate heatmaps
+generate_heatmap <- function(category, data, location) {
+  
+  # Define Maaslin2 results path
+  maaslin_results_path <- file.path(base_path, paste0("DifferentialExpression_", category, "_", location, "/all_results.tsv"))
+  
+  # Check if Maaslin2 results exist
+  if (!file.exists(maaslin_results_path)) {
+    cat("Skipping:", maaslin_results_path, "- File not found\n")
+    return(NULL)
+  }
+  
+  # Load Maaslin2 results
+  maaslin_results <- read.delim(maaslin_results_path)
+  
+  # **Fix species names in Maaslin2 results** (replace '.' with ' ')
+  maaslin_results$feature <- gsub("\\.", " ", maaslin_results$feature)
+
+  # Select the **top 30 significant species** sorted by p-value
+  top_species <- maaslin_results %>%
+    arrange(pval) %>%
+    head(30) %>%
+    pull(feature)
+
+  # Subset data based on the **top 30 significant species**
+  data_subset <- filter_data_by_location(data, location)
+  data_subset <- data_subset[rownames(data_subset) %in% top_species, ]
+
+  # Check if we have species left after filtering
+  if (nrow(data_subset) == 0) {
+    cat("Warning: No matching top species found in the dataset for Heatmap of Top 30 Significant", category, "-", location, "\n")
+    return(NULL)
+  }
+
+  # Normalize relative abundance per species
+  data_subset <- t(apply(data_subset, 1, function(x) x / sum(x)))
+
+  # Define color palette
+  heatmap_colors <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(100)
+
+  # Generate heatmap
+  heatmap_plot <- Heatmap(
+    data_subset,
+    name = "Relative Abundance",
+    col = heatmap_colors,
+    row_names_side = "left",
+    cluster_rows = TRUE,
+    cluster_columns = TRUE,
+    show_row_names = TRUE,
+    show_column_names = TRUE,
+    column_names_gp = gpar(fontsize = 10),
+    row_names_gp = gpar(fontsize = 10),
+    heatmap_legend_param = list(title = "Relative Abundance"),
+    column_title = paste("Heatmap of Top 30 Significant", category, "-", location)
+  )
+
+  # Save the heatmap
+  output_file <- file.path(heatmap_output_dir, paste0("heatmap_", category, "_", location, ".png"))
+  png(output_file, width = 1200, height = 1200, res = 150)
+  draw(heatmap_plot)
+  dev.off()
+  
+  cat("Generated heatmap for:", category, location, "\n")
+}
+
+# Run heatmap generation for **each category and location**
+categories <- c("bacteria", "fungi", "virus")
+locations <- c("colon", "intestine", "cecum")
+
+for (category in categories) {
+  for (location in locations) {
+    if (category == "bacteria") {
+      generate_heatmap(category, combined_bacteria_S, location)
+    } else if (category == "fungi") {
+      generate_heatmap(category, combined_fungi_S, location)
+    } else {
+      generate_heatmap(category, combined_virus_S, location)
+    }
+  }
+}
+
+cat("All heatmaps saved in:", heatmap_output_dir, "\n")
+
+```
+
+```{r}
+# Load required libraries
+library(ggplot2)
+library(ComplexHeatmap)
+library(dplyr)
+library(tidyr)
+library(RColorBrewer)
+
+# Define input paths
+base_path <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/DifferentialExpression"
+
+# Define output path for heatmaps
+heatmap_output_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/figures/Heatmaps"
+if (!dir.exists(heatmap_output_dir)) dir.create(heatmap_output_dir, recursive = TRUE)
+
+# Load metadata
+metadata <- metadata_phy_ZnD5
+
+# Function to filter data by location
+filter_data_by_location <- function(data, location) {
+  # Identify samples belonging to the specified location
+  location_samples <- metadata$Sample[metadata$Location == location]
+  # Subset data based on location-specific samples
+  data_subset <- data[, colnames(data) %in% location_samples]
+  return(data_subset)
+}
+
+# Function to generate heatmaps with ZnD and ZnA grouping
+generate_heatmap <- function(category, data, location) {
+  
+  # Define Maaslin2 results path
+  maaslin_results_path <- file.path(base_path, paste0("DifferentialExpression_", category, "_", location, "/all_results.tsv"))
+  
+  # Check if Maaslin2 results exist
+  if (!file.exists(maaslin_results_path)) {
+    cat("Skipping:", maaslin_results_path, "- File not found\n")
+    return(NULL)
+  }
+  
+  # Load Maaslin2 results
+  maaslin_results <- read.delim(maaslin_results_path)
+  
+  # **Fix species names in Maaslin2 results** (replace '.' with ' ')
+  maaslin_results$feature <- gsub("\\.", " ", maaslin_results$feature)
+
+  # Select the **top 30 significant species** sorted by p-value
+  top_species <- maaslin_results %>%
+    arrange(pval) %>%
+    head(30) %>%
+    pull(feature)
+
+  # Subset data based on the **top 30 significant species**
+  data_subset <- filter_data_by_location(data, location)
+  data_subset <- data_subset[rownames(data_subset) %in% top_species, ]
+
+  # Check if we have species left after filtering
+  if (nrow(data_subset) == 0) {
+    cat("Warning: No matching top species found in the dataset for Heatmap of Top 30 Significant", category, "-", location, "\n")
+    return(NULL)
+  }
+
+  # Normalize relative abundance per species
+  data_subset <- t(apply(data_subset, 1, function(x) x / sum(x)))
+
+  # **Order columns by Treatment (ZnD | ZnA)**
+  treatment_order <- metadata %>% 
+    filter(Sample %in% colnames(data_subset)) %>%
+    arrange(Treatment)  # Ensure ZnD is first, then ZnA
+
+  data_subset <- data_subset[, treatment_order$Sample]
+
+  # Define **annotation for Treatment groups**
+  treatment_colors <- c("ZnD" = "#E69F00", "ZnA" = "#56B4E9")
+  column_annotation <- HeatmapAnnotation(
+    Treatment = treatment_order$Treatment,
+    col = list(Treatment = treatment_colors)
+  )
+
+  # Define color palette for heatmap
+  heatmap_colors <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(100)
+
+  # Generate heatmap
+  heatmap_plot <- Heatmap(
+    data_subset,
+    name = "Relative Abundance",
+    col = heatmap_colors,
+    row_names_side = "left",
+    cluster_rows = TRUE,
+    cluster_columns = FALSE,  # Keep fixed order ZnD -> ZnA
+    show_row_names = TRUE,
+    show_column_names = TRUE,
+    column_names_gp = gpar(fontsize = 10),
+    row_names_gp = gpar(fontsize = 10),
+    heatmap_legend_param = list(title = "Relative Abundance"),
+    column_title = paste("Heatmap of Top 30 Significant", category, "-", location),
+    top_annotation = column_annotation  # Add Treatment annotation
+  )
+
+  # Save the heatmap
+  output_file <- file.path(heatmap_output_dir, paste0("heatmap_", category, "_", location, ".png"))
+  png(output_file, width = 1200, height = 1200, res = 150)
+  draw(heatmap_plot)
+  dev.off()
+  
+  cat("Generated heatmap for:", category, location, "\n")
+}
+
+# Run heatmap generation for **each category and location**
+categories <- c("bacteria", "fungi", "virus")
+locations <- c("colon", "intestine", "cecum")
+
+for (category in categories) {
+  for (location in locations) {
+    if (category == "bacteria") {
+      generate_heatmap(category, combined_bacteria_S, location)
+    } else if (category == "fungi") {
+      generate_heatmap(category, combined_fungi_S, location)
+    } else {
+      generate_heatmap(category, combined_virus_S, location)
+    }
+  }
+}
+
+cat("All heatmaps saved in:", heatmap_output_dir, "\n")
+
+```
+
+
+```{r}
+unique(metadata_phy_ZnD5$Location)
+metadata_phy_ZnD5$Location <- tolower(metadata_phy_ZnD5$Location)
+table(metadata_phy_ZnD5$Location)
+setdiff(metadata_phy_ZnD5$Sample, colnames(combined_bacteria_S))
+
+```
+```{r}
+# Load Maaslin2 results for bacteria (adjust for fungi/viruses)
+maaslin_results_path <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/DifferentialExpression/DifferentialExpression_bacteria_colon/all_results.tsv"
+maaslin_results <- read.delim(maaslin_results_path)
+
+# Get the top 30 species sorted by p-value
+top_species <- maaslin_results %>%
+  arrange(pval) %>%
+  head(30) %>%
+  pull(feature)
+
+top_species
+combined_bacteria_S
+
+# Check how many of these are in the dataset
+missing_species <- setdiff(top_species, rownames(combined_bacteria_S))
+
+cat("Number of missing species in dataset:", length(missing_species), "\n")
+cat("Missing species:\n", paste(missing_species, collapse = ", "), "\n")
+
+```
+

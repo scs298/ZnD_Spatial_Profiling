@@ -1,0 +1,1481 @@
+---
+title: "ZnD5_Humann3"
+output: html_document
+date: "2025-05-02"
+---
+
+#LOAD HUMANN3
+
+
+```{r fig.width= 10, fig.height= 10}
+metadata_ZnD5 <- read.table("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/ZnD5_metadata.csv", header = TRUE, sep = ",", stringsAsFactors = FALSE)
+metadata_ZnD5$Treatment <- as.factor(metadata_ZnD5$Treatment)
+metadata_ZnD5$Treatment <- relevel(metadata_ZnD5$Treatment, ref = "ZnA")
+metadata_ZnD5$Sample <- gsub("ZnD5\\.", "ZnD5-", metadata_ZnD5$Sample)
+rownames(metadata_ZnD5) <- metadata_ZnD5$Sample
+metadata_ZnD5
+
+# Load necessary libraries
+library(tidyverse)
+library(AnnotationDbi)
+library(GO.db)
+library(pheatmap)
+
+# Step 1: Read the HUMAnN3 joined table
+go_data <- read_tsv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/humann_output_final/joined_go_cpm.tsv")
+
+# Rename the first column to 'GO'
+colnames(go_data)[1] <- "GO"
+
+# Step 2: Clean column names to condense sample names
+colnames(go_data)[2:ncol(go_data)] <- gsub(".*ZnD5-|_.*$", "", colnames(go_data)[2:ncol(go_data)])
+
+# Step 3: Clean up GO IDs by removing microbial names and redundant parts
+go_data$GO <- gsub("\\|.*$", "", go_data$GO)  # Remove everything after the pipe
+go_data$GO <- gsub("^GO:", "", go_data$GO)     # Remove "GO:" prefix
+
+# Step 4: Filter valid GO terms and remove unwanted entries
+go_data <- go_data %>%
+  filter(grepl("^[0-9]+$", GO)) %>%
+  filter(!grepl("unclassified|UNKNOWN", GO, ignore.case = TRUE))
+
+# Step 5: Add the "GO:" prefix back to cleaned GO IDs
+go_data$GO <- paste0("GO:", go_data$GO)
+
+# Step 6: Map GO IDs to biological terms using AnnotationDbi
+go_ids <- unique(go_data$GO)
+go_terms <- AnnotationDbi::select(GO.db, keys = go_ids, columns = c("TERM", "ONTOLOGY"), keytype = "GOID")
+
+# Step 7: Merge mapped GO terms with the original data
+go_data <- go_data %>%
+  left_join(go_terms, by = c("GO" = "GOID"))
+
+# Step 8: Replace GO IDs with human-readable terms if available
+go_data$GO <- ifelse(!is.na(go_data$TERM), go_data$TERM, go_data$GO)
+
+# Step 9: Aggregate duplicates by summing values (if multiple entries exist for the same GO term)
+go_data <- go_data %>%
+  group_by(GO) %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  ungroup()
+
+# Step 10: Convert tibble to data frame
+go_data <- as.data.frame(go_data)
+
+# Step 11: Set row names AFTER aggregation
+rownames(go_data) <- go_data$GO
+
+# Step 12: Remove the redundant GO column
+go_data <- go_data[, -1]
+
+# Step 13: Calculate variance and select top 50 most variable GO terms
+go_data_var <- go_data %>%
+  mutate(variance = apply(., 1, var)) %>%
+  arrange(desc(variance))
+
+# Select the top 50 most variable GO terms
+top_go <- go_data_var[1:50, -ncol(go_data_var)]
+
+# Transpose if necessary
+if (ncol(top_go) > nrow(top_go)) {
+  top_go <- t(top_go)
+}
+
+# Step 14: Load metadata and create annotations for location
+sample_annotations <- metadata_ZnD5 %>%
+  as_tibble() %>%
+  dplyr::mutate(Sample = gsub(".*ZnD5-|_.*$", "", Sample)) %>%
+  column_to_rownames(var = "Sample")
+
+# Custom colors for annotations
+annotation_colors <- list(
+  Location = c("colon" = "#D55E00", "intestine" = "#56B4E9", "cecum" = "#009E73"),
+  Treatment = c("ZnA" = "#75AE33", "ZnD" = "#E8B31A")
+)
+
+# Step 15: Generate the heatmap with correct row names
+
+pheatmap(as.matrix(top_go),
+         scale = "row",
+         clustering_distance_rows = "euclidean",
+         clustering_distance_cols = "euclidean",
+         clustering_method = "complete",
+         fontsize_row = 10,
+         fontsize_col = 10,
+         cellwidth = 10,
+         cellheight = 8,
+         annotation_col = sample_annotations["Location"],
+         annotation_colors = annotation_colors,
+         show_rownames = TRUE,
+         show_colnames = TRUE,
+         main = "Top 50 Most Variable GO Terms by Location",
+         width = 12,
+         height = 15)
+dev.off()
+
+top_go
+
+go_data
+metadata_ZnD5
+```
+
+
+```{r}
+# 1. Extract the short sample names from go_data column names
+short_sample_names <- colnames(go_data)
+
+# 2. For each short sample name, find its corresponding extended name
+# We'll use a fuzzy matching approach using grepl
+sample_mapping <- sapply(short_sample_names, function(short_name) {
+  matched_sample <- metadata_ZnD5$Sample[grepl(short_name, metadata_ZnD5$Sample)]
+  if (length(matched_sample) > 0) {
+    return(matched_sample[1])  # Use the first match if multiple
+  } else {
+    return(NA)  # If no match found
+  }
+})
+
+# 3. Create a dataframe linking short sample names to Locations
+sample_location_df <- data.frame(
+  ShortName = short_sample_names,
+  ExtendedName = sample_mapping
+)
+
+# Merge with metadata_ZnD5 to get the Location
+sample_location_df <- merge(sample_location_df, metadata_ZnD5, by.x = "ExtendedName", by.y = "Sample", all.x = TRUE)
+
+# 4. For each Location, select the columns in go_data that belong to that Location
+aggregated_go_data <- data.frame(row.names = rownames(go_data))
+
+for (loc in unique(sample_location_df$Location)) {
+  # Get the short sample names that map to this location
+  samples_in_location <- sample_location_df$ShortName[sample_location_df$Location == loc]
+  
+  # Calculate the row-wise mean for these samples
+  aggregated_go_data[[loc]] <- rowMeans(go_data[, samples_in_location], na.rm = TRUE)
+}
+
+# Check the result
+aggregated_go_data
+
+# Initialize a list to store the top 20 terms for each location
+top_terms_list <- list()
+
+for (loc in colnames(aggregated_go_data)) {
+  cat("Processing location:", loc, "\n")
+  
+  # Subset by descending order
+  ordered_terms <- aggregated_go_data[order(-aggregated_go_data[[loc]]), , drop = FALSE]
+  
+  # Print diagnostic: number of rows after ordering
+  cat("Number of GO terms available for", loc, ":", nrow(ordered_terms), "\n")
+  
+  # If fewer than 20 terms, take what’s available
+  top_terms_20 <- head(ordered_terms, 20)
+  
+  # Add GO term names explicitly
+  top_terms_20$GO_Term <- rownames(top_terms_20)
+  
+  # Print the top few GO terms to confirm
+  cat("Top GO terms for", loc, ":\n")
+  print(top_terms_20$GO_Term)
+  
+  # Store only the relevant columns
+  top_terms_list[[loc]] <- top_terms_20[, c("GO_Term", loc)]
+}
+
+# Combine the list into a single dataframe
+top_terms_df <- do.call(rbind, lapply(names(top_terms_list), function(loc) {
+  df <- top_terms_list[[loc]]
+  data.frame(
+    GO_Term = df$GO_Term,
+    Abundance = df[[loc]],
+    Location = loc
+  )
+}))
+
+# Print the final top terms dataframe
+print(top_terms_df)
+
+```
+
+```{r}
+# Keep terms with at least 10 CPM in ≥1 region
+filtered_go_data <- aggregated_go_data[rowSums(aggregated_go_data >= 10) > 0, ]
+
+# Keep terms found in at least 2 locations (non-zero)
+filtered_go_data <- filtered_go_data[rowSums(filtered_go_data > 0) >= 2, ]
+
+## ── PARAMETERS ─────────────────────────────────────────────────────────────
+n_top <- 50                 # number of GO terms to keep per Location
+
+## ── 1. Identify top-50 terms per Location ──────────────────────────────────
+top_terms_list <- list()
+
+for (loc in colnames(filtered_go_data)) {
+  ordered_terms  <- filtered_go_data[order(-filtered_go_data[[loc]]), , drop = FALSE]
+  top_terms_n    <- head(ordered_terms, n_top)
+  top_terms_n$GO_Term <- rownames(top_terms_n)
+  top_terms_list[[loc]] <- top_terms_n[, c("GO_Term", loc)]
+}
+
+top_terms_df <- do.call(rbind, lapply(names(top_terms_list), function(loc) {
+  df <- top_terms_list[[loc]]
+  data.frame(
+    GO_Term  = df$GO_Term,
+    Reads    = df[[loc]],
+    Location = loc,
+    stringsAsFactors = FALSE
+  )
+}))
+
+## ── 2. Total GO-mapped reads per Location ──────────────────────────────────
+total_reads <- setNames(colSums(filtered_go_data, na.rm = TRUE),
+                        colnames(filtered_go_data))
+
+## ── 3. Sum reads for the top-50 terms & compute percentages ────────────────
+library(dplyr)
+
+pct_top50 <- top_terms_df %>%
+  group_by(Location) %>%
+  summarise(top50_reads = sum(Reads, na.rm = TRUE)) %>%
+  mutate(total_reads       = total_reads[Location],
+         pct_total_reads   = 100 * top50_reads / total_reads) %>%
+  arrange(Location)
+
+print(pct_top50)
+
+## ── Optional: quick bar plot ───────────────────────────────────────────────
+# library(ggplot2)
+# ggplot(pct_top50, aes(Location, pct_total_reads)) +
+#   geom_col(width = 0.6) +
+#   labs(y = "% of total GO reads represented by top 50 terms",
+#        title = "Dominance of top 50 GO terms per gut region") +
+#   theme_minimal(base_size = 12)
+
+# Count how many GO terms are non-zero in each region
+terms_per_location <- colSums(filtered_go_data > 0, na.rm = TRUE)
+
+# Format as data frame
+terms_per_location_df <- data.frame(
+  Location = names(terms_per_location),
+  Total_GO_Terms = terms_per_location
+)
+
+print(terms_per_location_df)
+
+get_top_n_for_90pct <- function(abundance_vector) {
+  sorted_vals <- sort(abundance_vector, decreasing = TRUE)
+  cum_sum <- cumsum(sorted_vals)
+  total <- sum(sorted_vals)
+  n_terms <- which(cum_sum >= 0.9 * total)[1]
+  return(n_terms)
+}
+
+# Apply function to each region
+terms_to_90pct <- sapply(aggregated_go_data, get_top_n_for_90pct)
+
+# Convert to data frame
+terms_to_90pct_df <- data.frame(
+  Location = names(terms_to_90pct),
+  GO_Terms_Required_for_90pct = terms_to_90pct
+)
+
+print(terms_to_90pct_df)
+
+
+```
+
+```{r}
+# Load required packages
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(grid)  # for unit()
+
+# Define color palette
+location_colors <- c("colon" = "#D55E00", "intestine" = "#56B4E9", "cecum" = "#009E73")
+
+# Function to compute cumulative abundance %
+p <- compute_cumulative <- function(abundances, region_name) {
+  sorted <- sort(abundances, decreasing = TRUE)
+  cum_reads <- cumsum(sorted)
+  total_reads <- sum(sorted)
+  data.frame(
+    Rank = seq_along(sorted),
+    CumulativePercent = 100 * cum_reads / total_reads,
+    Location = region_name
+  )
+}
+
+# Combine cumulative data across regions
+cumulative_data <- bind_rows(
+  compute_cumulative(aggregated_go_data$colon, "colon"),
+  compute_cumulative(aggregated_go_data$cecum, "cecum"),
+  compute_cumulative(aggregated_go_data$intestine, "intestine")
+)
+
+# Plot with custom theme and colors
+p <- ggplot(cumulative_data, aes(x = Rank, y = CumulativePercent, color = Location)) +
+  geom_line(size = 1.2) +
+  geom_hline(yintercept = c(50, 75, 90), linetype = "dashed", color = "gray60") +
+  scale_color_manual(values = location_colors) +
+  labs(
+    title = "Cumulative GO Term Coverage by Gut Region",
+    x = "Top N GO Terms",
+    y = "% of Total GO-Mapped Reads",
+    color = "Location"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 17, face = "bold"),
+    axis.title.x = element_text(size = 16, face = "bold"),
+    axis.title.y = element_text(size = 16, face = "bold"),
+    axis.text.x = element_text(size = 14, face = "bold"),
+    axis.text.y = element_text(size = 14, face = "bold"),
+    legend.position = "bottom",
+    legend.title = element_text(size = 14, face = "bold"),  
+    legend.text = element_text(size = 8, face = "bold"),
+    legend.key.size = unit(0.5, "cm"),
+    legend.spacing.x = unit(0.2, "cm"),
+    legend.box = "horizontal"
+  )
+
+out_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/PlusPF/figures"
+if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+## ── 5.  Save the plot ──────────────────────────────────────────────────────
+ggsave(filename = file.path(out_dir, "cumulative_GO_coverage.png"),
+       plot     = p, width = 8, height = 6, dpi = 300)
+
+```
+
+
+
+```{r}
+# Load necessary libraries
+if (!requireNamespace("VennDiagram", quietly = TRUE)) {
+  install.packages("VennDiagram")
+}
+library(VennDiagram)
+library(grid)
+
+# Assume aggregated_go_data and location_colors are already defined
+# aggregated_go_data is a dataframe with GO terms as rownames and locations as columns
+# location_colors is a named vector
+
+# 1️⃣ Get top 50 terms per location
+all_terms <- lapply(colnames(aggregated_go_data), function(loc) {
+  terms <- rownames(aggregated_go_data[aggregated_go_data[[loc]] > 0, , drop = FALSE])
+  return(terms)
+})
+names(all_terms) <- colnames(aggregated_go_data)
+
+# 2️⃣ Draw the Venn diagram
+venn.plot <- draw.triple.venn(
+  area1 = length(top_terms_50$colon),
+  area2 = length(top_terms_50$intestine),
+  area3 = length(top_terms_50$cecum),
+  n12 = length(intersect(top_terms_50$colon, top_terms_50$intestine)),
+  n23 = length(intersect(top_terms_50$intestine, top_terms_50$cecum)),
+  n13 = length(intersect(top_terms_50$colon, top_terms_50$cecum)),
+  n123 = length(Reduce(intersect, top_terms_50)),
+  category = c("colon", "intestine", "cecum"),
+  fill = c(location_colors["colon"], location_colors["intestine"], location_colors["cecum"]),
+  alpha = 0.5,
+  cex = 1.5,
+  cat.cex = 1.5,
+  euler.d = FALSE,
+  scaled = FALSE
+)
+
+venn.plot.all <- draw.triple.venn(
+  area1 = length(all_terms$colon),
+  area2 = length(all_terms$intestine),
+  area3 = length(all_terms$cecum),
+  n12 = length(intersect(all_terms$colon, all_terms$intestine)),
+  n23 = length(intersect(all_terms$intestine, all_terms$cecum)),
+  n13 = length(intersect(all_terms$colon, all_terms$cecum)),
+  n123 = length(Reduce(intersect, all_terms)),
+  category = c("colon", "intestine", "cecum"),
+  fill = c(location_colors["colon"], location_colors["intestine"], location_colors["cecum"]),
+  alpha = 0.5,
+  cex = 1.5,
+  cat.cex = 1.5,
+  euler.d = FALSE,
+  scaled = FALSE
+)
+
+
+# 3️⃣ Plot the Venn diagram
+grid.newpage()
+grid.draw(venn.plot.a)
+
+# 4️⃣ Print overlaps
+cat("\nOverlap between colon and intestine:\n", 
+    paste(intersect(top_terms_50$colon, top_terms_50$intestine), collapse = ", "), "\n")
+cat("\nOverlap between intestine and cecum:\n", 
+    paste(intersect(top_terms_50$intestine, top_terms_50$cecum), collapse = ", "), "\n")
+cat("\nOverlap between colon and cecum:\n", 
+    paste(intersect(top_terms_50$colon, top_terms_50$cecum), collapse = ", "), "\n")
+cat("\nOverlap between all three locations:\n", 
+    paste(Reduce(intersect, top_terms_50), collapse = ", "), "\n")
+
+cat("\nOverlap between colon and intestine:\n", 
+    paste(intersect(all_terms$colon, all_terms$intestine), collapse = ", "), "\n")
+cat("\nOverlap between intestine and cecum:\n", 
+    paste(intersect(all_terms$intestine, all_terms$cecum), collapse = ", "), "\n")
+cat("\nOverlap between colon and cecum:\n", 
+    paste(intersect(all_terms$colon, all_terms$cecum), collapse = ", "), "\n")
+cat("\nOverlap between all three locations:\n", 
+    paste(Reduce(intersect, all_terms), collapse = ", "), "\n")
+
+# 5️⃣ Identify unique terms in each location
+unique_terms <- lapply(names(top_terms_50), function(loc) {
+  other_locs <- setdiff(names(top_terms_50), loc)
+  unique_in_loc <- setdiff(top_terms_50[[loc]], unlist(top_terms_50[other_locs]))
+  return(unique_in_loc)
+})
+names(unique_terms) <- names(top_terms_50)
+
+# 6️⃣ Print unique terms per location
+cat("\nUnique terms per location:\n")
+for (loc in names(unique_terms)) {
+  if (length(unique_terms[[loc]]) > 0) {
+    cat("\nUnique terms for", loc, ":\n", paste(unique_terms[[loc]], collapse = ", "), "\n")
+  } else {
+    cat("\nNo unique terms found for", loc, ".\n")
+  }
+}
+
+
+# 7️⃣ Identify terms shared by exactly two locations (pairwise overlaps excluding the three-way overlap)
+pairwise_exclusive <- list(
+  "colon_intestine" = setdiff(intersect(top_terms_50$colon, top_terms_50$intestine), Reduce(intersect, top_terms_50)),
+  "intestine_cecum" = setdiff(intersect(top_terms_50$intestine, top_terms_50$cecum), Reduce(intersect, top_terms_50)),
+  "colon_cecum" = setdiff(intersect(top_terms_50$colon, top_terms_50$cecum), Reduce(intersect, top_terms_50))
+)
+
+# 8️⃣ Print pairwise exclusive overlaps
+cat("\nTerms shared by colon and intestine ONLY:\n", 
+    paste(pairwise_exclusive$colon_intestine, collapse = ", "), "\n")
+
+cat("\nTerms shared by intestine and cecum ONLY:\n", 
+    paste(pairwise_exclusive$intestine_cecum, collapse = ", "), "\n")
+
+cat("\nTerms shared by colon and cecum ONLY:\n", 
+    paste(pairwise_exclusive$colon_cecum, collapse = ", "), "\n")
+
+pairwise_exclusive <- list(
+  "colon_intestine" = setdiff(intersect(all_terms$colon, all_terms$intestine), Reduce(intersect, all_terms)),
+  "intestine_cecum" = setdiff(intersect(all_terms$intestine, all_terms$cecum), Reduce(intersect, all_terms)),
+  "colon_cecum"     = setdiff(intersect(all_terms$colon, all_terms$cecum), Reduce(intersect, all_terms))
+)
+
+# Print the results
+cat("\nTerms shared by colon and intestine ONLY:\n", 
+    paste(pairwise_exclusive$colon_intestine, collapse = ", "), "\n")
+
+cat("\nTerms shared by intestine and cecum ONLY:\n", 
+    paste(pairwise_exclusive$intestine_cecum, collapse = ", "), "\n")
+
+cat("\nTerms shared by colon and cecum ONLY:\n", 
+    paste(pairwise_exclusive$colon_cecum, collapse = ", "), "\n")
+
+
+```
+
+```{r}
+
+unique_terms <- lapply(names(all_terms), function(loc) {
+  other_locs <- setdiff(names(all_terms), loc)
+  unique_in_loc <- setdiff(all_terms[[loc]], unlist(all_terms[other_locs]))
+  return(unique_in_loc)
+})
+names(unique_terms) <- names(all_terms)
+
+
+pairwise_exclusive
+# Create a data frame of GO terms and their category
+go_term_df <- data.frame(
+  GO_term = c(unique_terms$colon, unique_terms$intestine, unique_terms$cecum,
+              pairwise_exclusive$colon_intestine,
+              pairwise_exclusive$intestine_cecum,
+              pairwise_exclusive$colon_cecum),
+  Category = c(rep("colon_only", length(unique_terms$colon)),
+               rep("intestine_only", length(unique_terms$intestine)),
+               rep("cecum_only", length(unique_terms$cecum)),
+               rep("colon_intestine", length(pairwise_exclusive$colon_intestine)),
+               rep("intestine_cecum", length(pairwise_exclusive$intestine_cecum)),
+               rep("colon_cecum", length(pairwise_exclusive$colon_cecum)))
+)
+
+# Write to CSV
+write.csv(go_term_df, "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/PlusPF/colon_intestine_cecum_term_sets.csv", row.names = FALSE)
+
+```
+
+```{r}
+length(all_terms$colon)
+length(all_terms$intestine)
+length(all_terms$cecum)
+
+length(unique(unlist(all_terms)))
+```
+
+```{r}
+library(grid)
+grid.newpage()
+grid.draw(venn.plot)
+
+```
+
+
+
+
+#DIFFERENTIAL EXPRESSION BY LOCATION, BY TREATMENT BASED ON THE GO_DATA DATAFRAME GENERATED ABOVE
+
+
+
+
+#MAKE STACKED BAR CHARTS OF THE TOP30 FUNCTIONS BY LOCATION
+```{r}
+# Load required libraries
+library(tidyverse)
+library(ggplot2)
+library(grid)
+library(gridExtra)
+library(scales)
+
+# 🗂️ Clean metadata with Sample_clean matching cleaned sample names
+metadata_cleaned <- metadata_ZnD5
+metadata_cleaned$Sample_clean <- sub("^.*?(CL[0-9]+|Ce[0-9]+|IL[0-9]+).*", "\\1", metadata_cleaned$Sample)
+rownames(metadata_cleaned) <- metadata_cleaned$Sample_clean
+
+# Function to extract just the legend from a ggplot object
+extract_legend <- function(p) {
+  g <- ggplotGrob(p + theme(legend.position = "right"))
+  legend <- g$grobs[which(sapply(g$grobs, function(x) x$name) == "guide-box")][[1]]
+  return(legend)
+}
+
+# Function to generate stacked bar chart of top 30 GO terms per location
+generate_stacked_bar_chart_GO_by_location <- function(go_data, metadata, title, output_path) {
+  
+  # Add Taxa column for GO terms
+  go_data$GO_Term <- rownames(go_data)
+  
+  # Pivot to long format
+  long_data <- go_data %>%
+    pivot_longer(cols = -GO_Term, names_to = "Sample_clean", values_to = "Abundance") %>%
+    left_join(metadata_cleaned, by = "Sample_clean")
+  
+  # Order locations
+  long_data$Location <- factor(long_data$Location, levels = c("intestine", "cecum", "colon"))
+  
+  # Normalize relative abundance within each sample
+  long_data <- long_data %>%
+    group_by(Sample_clean) %>%
+    mutate(Relative_Abundance = Abundance / sum(Abundance))
+  
+  # Identify top 30 GO terms per location
+  top_30_per_location <- long_data %>%
+    group_by(Location, GO_Term) %>%
+    summarise(Total_Abundance = sum(Relative_Abundance, na.rm = TRUE), .groups = "drop") %>%
+    arrange(Location, desc(Total_Abundance)) %>%
+    group_by(Location) %>%
+    slice_head(n = 30) %>%
+    ungroup()
+  print(top_30_per_location)
+  
+  # Filter data to include only top 30 terms per location
+  filtered_data <- long_data %>%
+    semi_join(top_30_per_location, by = c("Location", "GO_Term"))
+  
+  # Aggregate mean relative abundance per GO term by location
+  summarized_data <- filtered_data %>%
+    group_by(Location, GO_Term) %>%
+    summarise(Mean_Abundance = mean(Relative_Abundance, na.rm = TRUE), .groups = "drop")
+  
+  # Define dynamic color palette
+  num_unique_terms <- summarized_data %>%
+    pull(GO_Term) %>%
+    unique() %>%
+    length()
+  
+  color_palette <- colorRampPalette(c(
+    "#E8B31A", "#56B4E9", "#009E73", "#F0E442", 
+    "#75AE33", "#D55E00", "#CC79A7"
+  ))(num_unique_terms)
+  
+  # Generate stacked bar plot
+  stacked_bar_plot <- ggplot(summarized_data, aes(x = Location, y = Mean_Abundance, fill = GO_Term)) +
+    geom_bar(stat = "identity", position = "fill", color = "black", width = 0.6) +
+    scale_fill_manual(values = color_palette) +
+    scale_y_continuous(labels = scales::label_number(accuracy = 0.01)) +
+    theme_minimal() +
+    labs(
+      title = title,
+      x = "Location",
+      y = "Relative Abundance",
+      fill = "GO Term"
+    ) +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+      axis.title.x = element_text(size = 16, face = "bold"),
+      axis.title.y = element_text(size = 16, face = "bold"),
+      axis.text.x = element_text(size = 14, face = "bold", angle = 45, hjust = 1,  color = "black"),
+      axis.text.y = element_text(size = 14, face = "bold",  color = "black"),
+      legend.position = "none",
+      legend.title = element_text(size = 14, face = "bold"),  
+      legend.text = element_text(size = 8, face = "bold"),
+      legend.key.size = unit(0.5, "cm"),
+      legend.spacing.x = unit(0.2, "cm"),
+      legend.box = "horizontal"
+    ) +
+    guides(fill = guide_legend(ncol = 2, byrow = TRUE))
+  
+  # Save stacked bar plot
+  ggsave(output_path, plot = stacked_bar_plot, width = 2.3, height = 5, dpi = 300, limitsize = FALSE)
+  
+  # Extract and save legend separately
+  legend <- extract_legend(stacked_bar_plot)
+  legend_path <- gsub(".png", "_legend.png", output_path)
+  png(legend_path, width = 2000, height = 1800, res = 300)
+  grid.draw(legend)
+  dev.off()
+  
+  message("✅ Stacked bar chart and legend saved to ", output_path)
+  
+  return(stacked_bar_plot)
+}
+
+# Example call
+generate_stacked_bar_chart_GO_by_location(
+  go_data = top_go,
+  metadata = metadata_ZnD5,
+  title = "Top 30 Functions",
+  output_path = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/PlusPF_Database/figures/StackedBarCharts/Location/stacked_bar_GO_Terms_by_Location.png"
+)
+
+```
+
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(grid)
+library(gridExtra)
+library(scales)
+
+# Clean metadata with Sample_clean matching cleaned sample names
+metadata_cleaned <- metadata_ZnD5
+metadata_cleaned$Sample_clean <- sub("^.*?(CL[0-9]+|Ce[0-9]+|IL[0-9]+).*", "\\1", metadata_cleaned$Sample)
+rownames(metadata_cleaned) <- metadata_cleaned$Sample_clean
+
+# Function to extract just the legend from a ggplot object
+extract_legend <- function(p) {
+  g <- ggplotGrob(p + theme(legend.position = "right"))
+  legend <- g$grobs[which(sapply(g$grobs, function(x) x$name) == "guide-box")][[1]]
+  return(legend)
+}
+
+generate_stacked_bar_chart_GO_by_location <- function(go_data, metadata, title, output_path) {
+  
+  # 🗂️ Add Taxa column for GO terms
+  go_data$GO_Term <- rownames(go_data)
+  
+  # 📈 Pivot to long format
+  long_data <- go_data %>%
+    pivot_longer(cols = -GO_Term, names_to = "Sample_clean", values_to = "Abundance") %>%
+    left_join(metadata_cleaned, by = "Sample_clean")
+  
+  # 🗂️ Order locations
+  long_data$Location <- factor(long_data$Location, levels = c("intestine", "cecum", "colon"))
+  
+  # 🧮 Normalize relative abundance within each sample
+  long_data <- long_data %>%
+    group_by(Sample_clean) %>%
+    mutate(Relative_Abundance = Abundance / sum(Abundance))
+  
+  # 📊 Identify top 30 GO terms per location
+  top_30_per_location <- long_data %>%
+    group_by(Location, GO_Term) %>%
+    summarise(Total_Abundance = sum(Relative_Abundance, na.rm = TRUE), .groups = "drop") %>%
+    arrange(Location, desc(Total_Abundance)) %>%
+    group_by(Location) %>%
+    slice_head(n = 30) %>%
+    ungroup()
+  
+  # Filter data to include only top 30 per location
+  filtered_data <- long_data %>%
+    semi_join(top_30_per_location, by = c("Location", "GO_Term"))
+  
+  # 📊 Aggregate by Location and GO term
+  summarized_data <- filtered_data %>%
+    group_by(Location, GO_Term) %>%
+    summarise(Mean_Abundance = mean(Relative_Abundance, na.rm = TRUE), .groups = "drop")
+  
+  # 🎨 Define color palette (same as your other plots)
+   num_unique_terms <- summarized_data %>%
+    pull(GO_Term) %>%
+    unique() %>%
+    length()
+  
+  color_palette <- colorRampPalette(c(
+    "#E8B31A", "#56B4E9", "#009E73", "#F0E442", 
+    "#75AE33", "#D55E00", "#CC79A7"
+  ))(num_unique_terms)
+
+  
+  # 📊 Generate the stacked bar plot
+  stacked_bar_plot <- ggplot(summarized_data, aes(x = Location, y = Mean_Abundance, fill = GO_Term)) +
+    geom_bar(stat = "identity", position = "fill", color = "black", width = 0.6) +
+    scale_fill_manual(values = color_palette) +
+    scale_y_continuous(labels = percent_format()) +
+    theme_minimal() +
+    labs(
+      title = title,
+      x = "Location",
+      y = "Relative Abundance",
+      fill = "GO Term"
+    ) +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 17, face = "bold"),
+      axis.title.x = element_text(size = 16, face = "bold"),
+      axis.title.y = element_text(size = 16, face = "bold"),
+      axis.text.x = element_text(size = 14, face = "bold", angle = 45, hjust = 1),
+      axis.text.y = element_text(size = 14, face = "bold"),
+      legend.position = "none",  # For separate export
+      legend.title = element_text(size = 14, face = "bold"),  
+      legend.text = element_text(size = 8, face = "bold"),
+      legend.key.size = unit(0.5, "cm"),
+      legend.spacing.x = unit(0.2, "cm"),
+      legend.box = "horizontal"
+    ) +
+    guides(fill = guide_legend(ncol = 2, byrow = TRUE))
+  
+  # Save the stacked bar plot
+  ggsave(output_path, plot = stacked_bar_plot, width = 2.3, height = 5, dpi = 300, limitsize = FALSE)
+  
+  # Extract and save the legend
+  legend <- extract_legend(stacked_bar_plot)
+  legend_path <- gsub(".png", "_legend.png", output_path)
+  png(legend_path, width = 2000, height = 1000, res = 300)
+  grid.draw(legend)
+  dev.off()
+  
+  return(stacked_bar_plot)
+}
+
+# Example call
+generate_stacked_bar_chart_GO_by_location(
+  go_data = top_go,
+  metadata = metadata_ZnD5,
+  title = "Top 30 GO Terms\nby Location",
+  output_path = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/PlusPF_Database/figures/StackedBarCharts/Location/stacked_bar_GO_Terms_by_Location.png"
+)
+
+```
+
+#HEATMAP ORDERED BY TREATMENT 
+
+```{r fig.height = 10}
+# Step 14: Load metadata and prepare annotations by Treatment
+sample_annotations <- metadata_ZnD5 %>%
+  as_tibble() %>%
+  mutate(Sample = gsub(".*ZnD5-|_.*$", "", Sample)) %>%
+  column_to_rownames(var = "Sample")
+
+# Set Location as a factor to maintain intestinal → cecum → colon order
+sample_annotations$Location <- factor(sample_annotations$Location, levels = c("intestine", "cecum", "colon"))
+
+# Manually order the columns: intestinal (IL), cecum (Ce), colon (CL)
+ordered_columns <- c(
+  grep("IL", colnames(top_go), value = TRUE),
+  grep("Ce", colnames(top_go), value = TRUE),
+  grep("CL", colnames(top_go), value = TRUE)
+)
+
+# First extract sample names by location and treatment
+intestine_znD <- sample_annotations %>% filter(Location == "intestine", Treatment == "ZnD") %>% rownames()
+intestine_znA <- sample_annotations %>% filter(Location == "intestine", Treatment == "ZnA") %>% rownames()
+
+cecum_znD <- sample_annotations %>% filter(Location == "cecum", Treatment == "ZnD") %>% rownames()
+cecum_znA <- sample_annotations %>% filter(Location == "cecum", Treatment == "ZnA") %>% rownames()
+
+colon_znD <- sample_annotations %>% filter(Location == "colon", Treatment == "ZnD") %>% rownames()
+colon_znA <- sample_annotations %>% filter(Location == "colon", Treatment == "ZnA") %>% rownames()
+
+# Combine to make ordered_columns: intestine → cecum → colon, ZnD before ZnA
+ordered_columns <- c(intestine_znA, intestine_znD, cecum_znA, cecum_znD, colon_znA, colon_znD)
+
+# Reorder top_go matrix columns accordingly
+top_go <- top_go[, ordered_columns]
+
+# Set Treatment as the top annotation
+annotation_colors <- list(
+  Treatment = c("ZnA" = "#75AE33", "ZnD" = "#E8B31A"),
+  Location = c("colon" = "#D55E00", "intestine" = "#56B4E9", "cecum" = "#009E73")
+)
+
+# Step 15: Generate heatmap with Treatment annotation
+#png("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/PlusPF_Database/figures/Heatmaps/Top_50_GO_Terms_Ordered_by_Location_Treatment_annotated.png", 
+    #width = 3000, height = 2500, res = 300)
+
+pheatmap(as.matrix(top_go),
+         scale = "row",
+         clustering_distance_rows = "euclidean",
+         clustering_distance_cols = "euclidean",
+         clustering_method = "complete",
+         cluster_cols = FALSE,
+         annotation_col = sample_annotations[ordered_columns, "Treatment", drop = FALSE],
+         annotation_colors = annotation_colors,
+         fontsize_row = 10,
+         fontsize_col = 10,
+         cellwidth = 10,
+         cellheight = 8,
+         show_rownames = TRUE,
+         show_colnames = TRUE,
+         main = "Top 50 Most Variable GO Terms by Treatment")
+dev.off()
+
+```
+
+
+
+#3 DIFFERENT HEATMAPS BY LOCATION, AND ANNOTATED BY TREATMENT AT THE TOP
+```{r}
+# Load necessary libraries
+library(tidyverse)
+library(AnnotationDbi)
+library(GO.db)
+library(pheatmap)
+
+# Step 1: Read the HUMAnN3 joined table
+go_data <- read_tsv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/humann_output_final/joined_go_cpm.tsv")
+
+# Rename the first column to 'GO'
+colnames(go_data)[1] <- "GO"
+
+# Step 2: Clean column names to condense sample names
+colnames(go_data)[2:ncol(go_data)] <- gsub(".*ZnD5-|_.*$", "", colnames(go_data)[2:ncol(go_data)])
+
+# Step 3: Clean up GO IDs
+go_data$GO <- gsub("\\|.*$", "", go_data$GO)
+go_data$GO <- gsub("^GO:", "", go_data$GO)
+
+# Step 4: Filter valid GO terms
+go_data <- go_data %>%
+  filter(grepl("^[0-9]+$", GO)) %>%
+  filter(!grepl("unclassified|UNKNOWN", GO, ignore.case = TRUE))
+
+# Step 5: Add "GO:" prefix back
+go_data$GO <- paste0("GO:", go_data$GO)
+
+# Step 6: Map GO IDs to terms
+go_ids <- unique(go_data$GO)
+go_terms <- AnnotationDbi::select(GO.db, keys = go_ids, columns = c("TERM", "ONTOLOGY"), keytype = "GOID")
+
+# Step 7: Merge mapped GO terms
+go_data <- go_data %>%
+  left_join(go_terms, by = c("GO" = "GOID"))
+
+# Step 8: Replace GO IDs with human-readable terms
+go_data$GO <- ifelse(!is.na(go_data$TERM), go_data$TERM, go_data$GO)
+
+# Step 9: Aggregate duplicates by summing values
+go_data <- go_data %>%
+  group_by(GO) %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  ungroup()
+
+# Step 10: Convert tibble to data frame and set row names
+go_data <- as.data.frame(go_data)
+rownames(go_data) <- go_data$GO
+go_data <- go_data[, -1]
+
+# Step 11: Calculate variance and select top 50 GO terms
+go_data_var <- go_data %>%
+  mutate(variance = apply(., 1, var)) %>%
+  arrange(desc(variance))
+top_go <- go_data_var[1:50, -ncol(go_data_var)]
+
+# Load metadata and create annotations
+sample_annotations <- metadata_ZnD5 %>%
+  as_tibble() %>%
+  dplyr::mutate(Sample = gsub(".*ZnD5-|_.*$", "", Sample)) %>%
+  column_to_rownames(var = "Sample")
+
+# Custom colors for annotations
+annotation_colors <- list(
+  Location = c("colon" = "#D55E00", "intestine" = "#56B4E9", "cecum" = "#009E73"),
+  Treatment = c("ZnA" = "#75AE33", "ZnD" = "#E8B31A")
+)
+
+bold_text <- function(text) {
+  grid::gpar(fontface = "bold", fontsize = 10)
+}
+
+
+# Function to generate heatmap for each location
+generate_heatmap <- function(location) {
+  # Filter samples based on location
+  location_samples <- rownames(sample_annotations)[sample_annotations$Location == location]
+  
+  # Manually group ZnD and ZnA samples
+  znA_samples <- location_samples[sample_annotations[location_samples, "Treatment"] == "ZnA"]
+  znD_samples <- location_samples[sample_annotations[location_samples, "Treatment"] == "ZnD"]
+  ordered_samples <- c(znA_samples, znD_samples)
+  
+  # Subset top_go for the current location
+  location_top_go <- top_go[, colnames(top_go) %in% ordered_samples]
+  location_top_go <- location_top_go[, ordered_samples]
+
+  # Generate heatmap with bold row and column names
+  png(paste0("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/PlusPF_Database/figures/Heatmaps/Top_50_GO_Terms_", location, ".png"), width = 3000, height = 2500, res = 300)
+  pheatmap(as.matrix(location_top_go),
+           scale = "row",
+           clustering_distance_rows = "euclidean",
+           clustering_distance_cols = "euclidean",
+           clustering_method = "complete",
+           fontsize_row = 10,
+           fontsize_col = 10,
+           cluster_cols = FALSE,  
+           cellwidth = 10,
+           cellheight = 8,
+           annotation_col = sample_annotations[ordered_samples, "Treatment", drop = FALSE],
+           annotation_colors = annotation_colors,
+           show_rownames = TRUE,
+           show_colnames = TRUE,
+           main = paste("Top 50 Most Variable GO Terms -", location),
+           width = 12,
+           height = 15,
+           fontface_row = "bold",       # Bold row names
+           fontface_col = "bold")       # Bold column names
+  dev.off()
+}
+
+# Generate heatmaps for each location
+locations <- c("intestine", "cecum", "colon")
+lapply(locations, generate_heatmap)
+
+```
+
+#GENERATE HEATMAPS (3 HEATMAPS BY LOCATION) BUT AGGREGATE THE VALUES FOR ZND AND ZNA
+
+```{r}
+generate_heatmap_aggregated <- function(location) {
+  location_samples <- rownames(sample_annotations)[sample_annotations$Location == location]
+  
+  znA_samples <- location_samples[sample_annotations[location_samples, "Treatment"] == "ZnA"]
+  znD_samples <- location_samples[sample_annotations[location_samples, "Treatment"] == "ZnD"]
+
+  location_top_go <- top_go[, colnames(top_go) %in% c(znA_samples, znD_samples)]
+
+  # Filter out GO terms that are completely zero in either ZnA or ZnD
+  keep_terms <- apply(location_top_go, 1, function(x) {
+    znA_vals <- x[names(x) %in% znA_samples]
+    znD_vals <- x[names(x) %in% znD_samples]
+    any(znA_vals > 0) && any(znD_vals > 0)
+  })
+  location_top_go <- location_top_go[keep_terms, ]
+
+  # Calculate variance across all samples in this location
+  top_go_var <- location_top_go %>%
+    dplyr::mutate(variance = apply(., 1, var)) %>%
+    dplyr::arrange(desc(variance)) %>%
+    dplyr::slice_head(n = 50) %>%
+    dplyr::select(-variance)
+
+  aggregated_matrix <- data.frame(
+    ZnA = rowMeans(top_go_var[, znA_samples], na.rm = TRUE),
+    ZnD = rowMeans(top_go_var[, znD_samples], na.rm = TRUE)
+  )
+  rownames(aggregated_matrix) <- rownames(top_go_var)
+
+  treatment_annotation <- data.frame(Treatment = factor(c("ZnA", "ZnD")))
+  rownames(treatment_annotation) <- c("ZnA", "ZnD")
+
+  png(paste0("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/PlusPF_Database/figures/Heatmaps/Top_50_GO_Terms_", location, "_aggregated.png"),
+      width = 2500, height = max(2400, nrow(aggregated_matrix) * 40), res = 300)
+
+  pheatmap(as.matrix(aggregated_matrix),
+           scale = "row",
+           clustering_distance_rows = "euclidean",
+           clustering_method = "complete",
+           fontsize = 16,
+           fontsize_row = 10,
+           fontsize_col = 16,
+           cluster_cols = FALSE,
+           annotation_col = treatment_annotation,
+           annotation_colors = annotation_colors,
+           show_rownames = TRUE,
+           show_colnames = TRUE,
+           main = paste("Top GO Terms\n", location),
+           fontface_row = "bold",
+           fontface_col = "bold",
+           cellwidth = 20,
+           cellheight = 8)
+  dev.off()
+}
+
+locations <- c("intestine", "cecum", "colon")
+lapply(locations, generate_heatmap_aggregated)
+```
+
+
+
+#DIFFERENTIAL EXPRESSION
+```{r}
+# Load necessary libraries
+library(Maaslin2)
+library(dplyr)
+
+# Set file paths
+humann3_file <- read_tsv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/humann_output_final/joined_go_cpm.tsv")
+output_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/PlusPF_Database/Differential_Expression_May2025/humann3"
+
+# Load data
+humann3_file
+go_data <- read.table(humann3_file, header = TRUE, sep = "\t", row.names = 1, check.names = FALSE)
+metadata <- metadata_phy_ZnD5
+
+# Clean and prepare the data
+# Remove unwanted columns and clean column names
+colnames(go_data) <- gsub("_Abundance-CPM", "", colnames(go_data))
+colnames(go_data) <- gsub(".*ZnD5-|_.*$", "", colnames(go_data))
+
+# Select samples common to both data and metadata
+common_samples <- intersect(colnames(go_data), rownames(metadata))
+go_data <- go_data[, common_samples]
+metadata <- metadata[common_samples, ]
+go_data
+metadata
+# Run Maaslin2 by Location (Reference: Intestine)
+run_maaslin2_by_location <- function(data, metadata, output_dir) {
+  Maaslin2(
+    input_data = data,
+    input_metadata = metadata,
+    output = file.path(output_dir, "Maaslin2_Location"),
+    fixed_effects = c("Location"),
+    reference = "Location,intestine"
+  )
+}
+
+# Run Maaslin2 by Treatment for each location
+run_maaslin2_by_treatment <- function(data, metadata, output_dir, location_name) {
+  # Subset data and metadata for the specific location
+  loc_metadata <- metadata %>% filter(Location == location_name)
+  loc_data <- data[, rownames(loc_metadata), drop = FALSE]
+  
+  Maaslin2(
+    input_data = loc_data,
+    input_metadata = loc_metadata,
+    output = file.path(output_dir, paste0("Maaslin2_Treatment_", location_name)),
+    fixed_effects = c("Treatment")
+  )
+}
+
+# Run analysis
+run_maaslin2_by_location(go_data, metadata, output_dir)
+
+locations <- c("intestine", "colon", "cecum")
+for (loc in locations) {
+  run_maaslin2_by_treatment(go_data, metadata, output_dir, loc)
+}
+
+```
+
+
+```{r fig.width= 10, fig.height= 10}
+# Load necessary libraries
+library(tidyverse)
+library(AnnotationDbi)
+library(GO.db)
+library(pheatmap)
+
+# Step 1: Read the HUMAnN3 joined table
+go_data <- read_tsv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/humann_output_final/joined_go_cpm.tsv")
+
+# Rename the first column to 'GO'
+colnames(go_data)[1] <- "GO"
+
+# Step 2: Clean column names to condense sample names
+colnames(go_data)[2:ncol(go_data)] <- gsub(".*ZnD5-|_.*$", "", colnames(go_data)[2:ncol(go_data)])
+
+# Step 3: Clean up GO IDs by removing microbial names and redundant parts
+go_data$GO <- gsub("\\|.*$", "", go_data$GO)  # Remove everything after the pipe
+go_data$GO <- gsub("^GO:", "", go_data$GO)     # Remove "GO:" prefix
+
+# Step 4: Filter valid GO terms and remove unwanted entries
+go_data <- go_data %>%
+  filter(grepl("^[0-9]+$", GO)) %>%
+  filter(!grepl("unclassified|UNKNOWN", GO, ignore.case = TRUE))
+
+# Step 5: Add the "GO:" prefix back to cleaned GO IDs
+go_data$GO <- paste0("GO:", go_data$GO)
+
+# Step 6: Map GO IDs to biological terms using AnnotationDbi
+go_ids <- unique(go_data$GO)
+go_terms <- AnnotationDbi::select(GO.db, keys = go_ids, columns = c("TERM", "ONTOLOGY"), keytype = "GOID")
+
+# Step 7: Merge mapped GO terms with the original data
+go_data <- go_data %>%
+  left_join(go_terms, by = c("GO" = "GOID"))
+
+# Step 8: Replace GO IDs with human-readable terms if available
+go_data$GO <- ifelse(!is.na(go_data$TERM), go_data$TERM, go_data$GO)
+
+# Step 9: Aggregate duplicates by summing values (if multiple entries exist for the same GO term)
+go_data <- go_data %>%
+  group_by(GO) %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  ungroup()
+
+# Step 10: Convert tibble to data frame
+go_data <- as.data.frame(go_data)
+
+# Step 11: Set row names AFTER aggregation
+rownames(go_data) <- go_data$GO
+
+# Step 12: Remove the redundant GO column
+go_data <- go_data[, -1]
+
+# Step 13: Calculate variance and select top 50 most variable GO terms
+go_data_var <- go_data %>%
+  mutate(variance = apply(., 1, var)) %>%
+  arrange(desc(variance))
+
+# Select the top 50 most variable GO terms
+top_go <- go_data_var[1:50, -ncol(go_data_var)]
+
+# Transpose if necessary
+if (ncol(top_go) > nrow(top_go)) {
+  top_go <- t(top_go)
+}
+
+# Step 14: Load metadata and create annotations for treatment
+sample_annotations <- metadata_ZnD5 %>%
+  as_tibble() %>%
+  dplyr::mutate(Sample = gsub(".*ZnD5-|_.*$", "", Sample)) %>%
+  column_to_rownames(var = "Sample")
+
+# Custom colors for annotations
+annotation_colors <- list(
+  Location = c("colon" = "#D55E00", "intestine" = "#56B4E9", "cecum" = "#009E73"),
+  Treatment = c("ZnA" = "#75AE33", "ZnD" = "#E8B31A")
+)
+
+png("top_50_variable_go_terms_by_loc.png", width = 3000, height = 2500, res = 300)
+# Step 15: Generate the heatmap with Treatment annotation
+
+pheatmap(as.matrix(top_go),
+         scale = "row",
+         clustering_distance_rows = "euclidean",
+         clustering_distance_cols = "euclidean",
+         clustering_method = "complete",
+         fontsize_row = 10,
+         fontsize_col = 6,
+         cellwidth = 10,
+         cellheight = 8,
+         annotation_col = sample_annotations["Treatment"],  # Treatment annotation on top
+         annotation_colors = annotation_colors,
+         show_rownames = TRUE,
+         show_colnames = TRUE,
+         main = "Top 50 Most Variable GO Terms by Treatment",
+         width = 12,
+         height = 15)
+dev.off()
+```
+
+
+
+
+
+
+
+```{r}
+
+BiocManager::install("clusterProfiler", version = "3.19")
+BiocManager::install("pathview")
+BiocManager::install("enrichplot")
+library(clusterProfiler)
+library(enrichplot)
+library(ggplot2)
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+  library(clusterProfiler)
+  library(enrichplot)
+  BiocManager::install(c("DOSE", "enrichplot"))
+  if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager") 
+  BiocManager::install("biomaRt")
+  library(biomaRt)
+  
+  # SET THE DESIRED ORGANISM HERE
+  organism = "org.Mm.eg.db"
+  BiocManager::install(organism, character.only = TRUE)
+  library(organism, character.only = TRUE)
+
+```
+
+
+
+
+
+
+
+```{r}
+# Load necessary libraries
+library(tidyverse)
+library(reshape2)
+library(ggplot2)
+library(pheatmap)
+
+# Read in the HUMAnN3 joined table
+go_data <- read_tsv("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/humann_output_final/joined_go_cpm.tsv")
+
+# Replace column names from the second column onward
+colnames(go_data)[2:ncol(go_data)] <- gsub("_Abundance-CPM", "", colnames(go_data)[2:ncol(go_data)])
+
+# Calculate variance across samples for each row
+go_data_var <- go_data %>%
+  column_to_rownames(var = colnames(go_data)[1]) %>%
+  as.data.frame() %>%
+  mutate(variance = apply(., 1, var, na.rm = TRUE)) %>%
+  arrange(desc(variance))
+
+# Select top 50 most variable GO terms
+top_go <- go_data_var[1:50, -ncol(go_data_var)]
+
+# Optional: Transpose if more columns than rows (adjust if necessary)
+if (ncol(top_go) > nrow(top_go)) {
+  top_go <- t(top_go)
+}
+
+# Create annotations for location
+sample_annotations <- metadata_ZnD5 %>%
+  select(Sample, Location) %>%
+  column_to_rownames(var = "Sample")
+
+# Sort the columns of the heatmap by location (colon, intestine, cecum)
+sorted_cols <- sample_annotations %>%
+  arrange(Location) %>%
+  rownames()
+
+# Reorder the columns in the data matrix based on sorted sample names
+top_go <- top_go[, sorted_cols]
+
+# Heatmap with improved settings and grouped X-axis by location
+pheatmap(as.matrix(top_go),
+         scale = "row",
+         clustering_distance_rows = "euclidean",
+         clustering_distance_cols = "euclidean",
+         clustering_method = "complete",
+         fontsize_row = 4,                 # Smaller font size for row names
+         fontsize_col = 6,                 # Smaller font size for column names
+         cellwidth = 10,                   # Adjust cell width
+         cellheight = 8,                   # Adjust cell height
+         annotation_col = sample_annotations,  # Add annotations for location
+         show_rownames = TRUE,
+         show_colnames = TRUE,
+         main = "Top 50 Most Variable GO Terms Grouped by Location",
+         width = 12,                       # Increase plot width
+         height = 15)                      # Increase plot height
+
+png("/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/humann_output_final/top50_GO_terms_heatmap.png", width = 1200, height = 1500, res = 150)
+pheatmap(as.matrix(top_go),
+         scale = "row",
+         clustering_distance_rows = "euclidean",
+         clustering_distance_cols = "euclidean",
+         clustering_method = "complete",
+         fontsize_row = 4,                 
+         fontsize_col = 6,                 
+         cellwidth = 10,                   
+         cellheight = 8,                   
+         annotation_col = sample_annotations,  
+         show_rownames = TRUE,
+         show_colnames = TRUE,
+         main = "Top 50 Most Variable GO Terms Grouped by Location")
+dev.off()
+
+
+```
+
+
+#NOW I WANT TO DO DIFFERENTIAL EXPRESSION ANALYSIS USING THE HUMANN3 DATA 
+
+```{r}
+library(dplyr) # For data manipulation
+
+input_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/humann_output/ZnDvZnA/"
+output_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/humann_output/ZnDvsZnA_NORM"   
+
+# Create output directory if it doesn't exist
+if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+
+# Get a list of all pathabundance.tsv files in subdirectories
+file_list <- list.files(input_dir, pattern = "pathabundance.tsv$", full.names = TRUE, recursive = TRUE)
+
+# Initialize a list to store processed dataframes
+data_list <- list()
+
+# Loop through each file and process
+for (file in file_list) {
+  # Read the data
+  data <- read.delim(file, header = TRUE, sep = "\t", row.names = 1)
+  
+  # Remove metadata rows (e.g., UNMAPPED, UNINTEGRATED) if present
+  data_clean <- data[!grepl("UNMAPPED|UNINTEGRATED", rownames(data)), , drop = FALSE]
+  
+  # Check if data_clean has any rows or numeric columns
+  if (nrow(data_clean) == 0 || !any(sapply(data_clean, is.numeric))) {
+    cat("Skipping file (no valid data):", file, "\n")
+    next
+  }
+  
+  # Ensure only numeric columns remain
+  data_numeric <- data_clean[, sapply(data_clean, is.numeric), drop = FALSE]
+  
+  # Convert all numeric values to integers
+  data_integer <- data.frame(lapply(data_numeric, function(x) as.integer(as.numeric(as.character(x)))), 
+                             row.names = rownames(data_numeric))
+  
+  # Add the sample name as a prefix to column names
+  sample_name <- basename(dirname(file)) # Extract the sample folder name
+  colnames(data_integer) <- paste0(sample_name, "_", colnames(data_integer))
+  
+  # Save the integer data to a new file
+  output_file <- file.path(output_dir, paste0(sample_name, "_pathabundance_integer.tsv"))
+  write.table(data_integer, output_file, sep = "\t", quote = FALSE, col.names = NA)
+  
+  # Add the dataframe to the list
+  data_list[[sample_name]] <- data_integer
+  
+  # Print progress
+  cat("Processed:", file, "\n")
+}
+
+# Combine all dataframes in the list by row names
+library(tidyverse)
+
+# Assuming `data_list` contains your 11 dataframes
+# Initialize combined_data with the first dataframe in the list
+combined_data <- data_list[[1]] %>%
+  rownames_to_column(var = "Pathway") # Convert row names to a column
+
+# Loop through the remaining dataframes and merge them one by one
+for (i in 2:length(data_list)) {
+  current_data <- data_list[[i]] %>%
+    rownames_to_column(var = "Pathway") # Convert row names to a column
+  
+  # Merge with the accumulated combined_data
+  combined_data <- full_join(combined_data, current_data, by = "Pathway")
+}
+
+# Convert "Pathway" column back to row names
+combined_data <- column_to_rownames(combined_data, "Pathway")
+
+# Save the combined dataframe to a CSV file
+combined_output_file <- file.path(output_dir, "combined_pathabundance_integer.csv")
+write.csv(combined_data, combined_output_file, row.names = TRUE)
+
+cat("Combined dataframe saved to:", combined_output_file, "\n")
+
+
+```
+
+
+```{r}
+library(Maaslin2)
+
+combined_data_t <- t(combined_data)
+combined_data_t <- as.data.frame(combined_data_t)
+combined_data_t
+
+# Replace the first hyphen (-) with a period (.) in rownames
+rownames(combined_data_t) <- gsub("(?<=\\d{2}_ZnD5)-", ".", rownames(combined_data_t), perl = TRUE)
+
+
+
+masalin_results_S_refC_c <- Maaslin2(
+  combined_data_t,
+  metadata_ZnD5_subset,
+  output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/humann_output/Maaslin2_results_ZnD5_humann3_refc",     # Output directory
+  fixed_effects = c("Treatment")  # Specify the grouping variable in your metadata
+)
+
+masalin_results_S_refC_c_location <- Maaslin2(
+combined_data_t,
+metadata_ZnD5_subset,
+output = "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/humann_output/Maaslin2_results_ZnD5_humann3_refc_location",     # Output directory
+fixed_effects = c("Location")  # Specify the grouping variable in your metadata
+)
+
+
+combined_data_t
+levels(metadata_phy_ZnD5$Treatment)
+metadata_phy_ZnD5
+```
+
+
+#HUMANN3 DIFFERENTIAL EXPRESSION, SEPARATED BY LOCATION
+
+```{r}
+# Load necessary libraries
+library(Maaslin2)
+library(dplyr)
+library(tidyr)
+
+# Ensure rownames of `combined_data_t` match the sample names in metadata
+rownames(combined_data_t) <- gsub("(?<=\\d{2}_ZnD5)-", ".", rownames(combined_data_t), perl = TRUE)
+combined_data_t
+# Define output base directory
+output_base_dir <- "/Users/savitasastry/Downloads/Zinc_Deficiency_SS/Metagenomics/humann_output/Maaslin2_results_ZnD5_humann3_refc"
+
+# Ensure the output directory exists
+if (!dir.exists(output_base_dir)) dir.create(output_base_dir, recursive = TRUE)
+
+# Define locations
+locations <- c("colon", "intestine", "cecum")
+
+# Loop through each location and perform differential expression
+for (location in locations) {
+  
+  # Filter metadata for the current location
+  metadata_location <- metadata_ZnD5_subset %>%
+    filter(Location == location)
+
+  # Extract sample names for the current location
+  sample_names <- metadata_location$Sample
+
+  # Filter `combined_data_t` to only include samples from this location
+  combined_data_location <- combined_data_t[sample_names, , drop = FALSE]
+
+  # Check if there are enough samples for analysis
+  if (nrow(combined_data_location) < 2) {
+    cat("Skipping location", location, "- Not enough samples for differential expression analysis\n")
+    next
+  }
+
+  # Define location-specific output directory
+  output_dir <- file.path(output_base_dir, paste0("Maaslin2_", location))
+  if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+
+  # Run Maaslin2 for ZnD vs ZnA within this location
+  maaslin_results <- Maaslin2(
+    input_data = combined_data_location,
+    input_metadata = metadata_location,
+    output = output_dir,
+    fixed_effects = c("Treatment") # Compare ZnD vs ZnA
+  )
+
+  cat("Differential expression analysis completed for:", location, "\n")
+}
+
+```
+
+```{r}
+metadata_ZnD5
+```
