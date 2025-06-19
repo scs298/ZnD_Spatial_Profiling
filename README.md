@@ -1,6 +1,6 @@
 ### **README: Multiomics approach to regionally profile Zn-driven host-gut microbiome interactions in the gastrointestinal tract**
 
-![VERSION3 ZnD Spatial Profiling_ Graphical Abstract](https://github.com/user-attachments/assets/4c4e85a7-0066-459d-93bf-45edc6868fb5)
+![VERSION4 ZnD Spatial Profiling_ Graphical Abstract](https://github.com/user-attachments/assets/0f25913d-b1c9-425b-8553-673f5b08cd2f)
 
 **Repository Structure**
 
